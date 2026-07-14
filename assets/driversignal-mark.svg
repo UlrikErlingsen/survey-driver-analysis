@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="DriverSignal mark">
+  <rect width="128" height="128" rx="30" fill="#173C3A"/>
+  <path d="M25 28V101" fill="none" stroke="#F8F5ED" stroke-width="6" stroke-linecap="round"/>
+  <path d="M28 91H57M28 65H78M28 39H101" fill="none" stroke="#83D2B4" stroke-width="10" stroke-linecap="round"/>
+  <path d="M50 91H64M70 65H86M93 39H109" fill="none" stroke="#F8F5ED" stroke-width="3" stroke-linecap="round"/>
+  <circle cx="57" cy="91" r="7" fill="#F2C66D"/>
+  <circle cx="78" cy="65" r="7" fill="#D95B40"/>
+  <circle cx="101" cy="39" r="7" fill="#F2C66D"/>
+</svg>

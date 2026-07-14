@@ -1,0 +1,20 @@
+cff-version: 1.2.0
+message: "If DriverSignal supports your research or teaching, please cite this software and the original sources for the methods you use."
+title: "DriverSignal: Open Survey Driver Analysis and Scale Reliability"
+type: software
+authors:
+  - family-names: "Erlingsen"
+    given-names: "Ulrik"
+    alias: "UlrikErlingsen"
+version: 1.0.0
+date-released: 2026-07-14
+license: AGPL-3.0-or-later
+repository-code: "https://github.com/UlrikErlingsen/survey-driver-analysis"
+url: "https://github.com/UlrikErlingsen/survey-driver-analysis"
+keywords:
+  - survey driver analysis
+  - Cronbach alpha
+  - net promoter score
+  - relative importance
+  - marketing analytics
+  - market research
