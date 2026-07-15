@@ -188,6 +188,7 @@ These apps share a visual language but answer different questions:
 - **[AdoptSignal](https://github.com/UlrikErlingsen/adoption-forecasting)** asks when a new product gets adopted.
 - **[PositionSignal](https://github.com/UlrikErlingsen/brand-positioning)** asks where brands sit relative to competitors.
 - **[AllocSignal](https://github.com/UlrikErlingsen/marketing-mix-allocation)** asks where the next marketing budget should go.
+- **[GateSignal](https://github.com/UlrikErlingsen/launch-decision-gate)** asks whether a concept should receive the next bounded investment.
 - **DriverSignal** asks which measured experiences are associated with satisfaction or recommendation, whether their scales cohere, and what deserves a causal test.
 
 ## Method references
