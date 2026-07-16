@@ -212,8 +212,8 @@ def masthead() -> None:
 
 def footer() -> None:
     st.markdown(
-        f"<div class='ds-footer'>DriverSignal {__version__}<span>•</span>Associations to investigate, not causal proof"
-        "<span>•</span>AGPL-3.0-or-later</div>",
+        f"<div class='ds-footer'>DriverSignal v{__version__}<span>◆</span>Associations to investigate, not causal proof"
+        "<span>◆</span>Part of the Signal suite<span>◆</span>AGPL-3.0-or-later</div>",
         unsafe_allow_html=True,
     )
 

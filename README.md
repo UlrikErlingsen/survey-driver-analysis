@@ -178,7 +178,7 @@ Local mode reads uploads into the Python process on that computer. DriverSignal 
 
 Respondent-level surveys can be sensitive even without names. Remove contact details, direct customer identifiers, free text, precise locations, protected characteristics not needed for the analysis, and small-group combinations. A hosted deployment changes the trust boundary; read [PRIVACY.md](PRIVACY.md) and [SECURITY.md](SECURITY.md).
 
-## Relationship to the Signal tools
+## Relationship to the Signal suite
 
 These apps share a visual language but answer different questions:
 
@@ -192,7 +192,11 @@ These apps share a visual language but answer different questions:
 - **[ExperimentSignal](https://github.com/UlrikErlingsen/experiment-analysis)** asks whether a randomized treatment caused a change worth acting on — the natural next step when DriverSignal flags a driver that deserves a causal test.
 - **[MeasureSignal](https://github.com/UlrikErlingsen/measurement-validation)** asks whether a multi-item score measures what you think it does — worth running before DriverSignal when a model depends on composite scores.
 - **[TextSignal](https://github.com/UlrikErlingsen/open-text-analysis)** asks what recurring language patterns appear in open-ended responses.
+- **Pricing-evidence prototype (private pending rename)** asks what price range is supported and how contribution moves.
+- **[RecommendSignal](https://github.com/UlrikErlingsen/recommender-evaluation)** asks which recommendation policy performs under temporal replay.
 - **DriverSignal** asks which measured experiences are associated with satisfaction or recommendation, whether their scales cohere, and what deserves a causal test.
+
+See the maintained suite overview at [ulrikerlingsen.com](https://ulrikerlingsen.com). Product labels that have not passed their own publication screen remain outside the public catalog.
 
 ## Method references
 
