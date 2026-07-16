@@ -189,6 +189,9 @@ These apps share a visual language but answer different questions:
 - **[PositionSignal](https://github.com/UlrikErlingsen/brand-positioning)** asks where brands sit relative to competitors.
 - **[AllocSignal](https://github.com/UlrikErlingsen/marketing-mix-allocation)** asks where the next marketing budget should go.
 - **[GateSignal](https://github.com/UlrikErlingsen/launch-decision-gate)** asks whether a concept should receive the next bounded investment.
+- **[ExperimentSignal](https://github.com/UlrikErlingsen/experiment-analysis)** asks whether a randomized treatment caused a change worth acting on — the natural next step when DriverSignal flags a driver that deserves a causal test.
+- **[MeasureSignal](https://github.com/UlrikErlingsen/measurement-validation)** asks whether a multi-item score measures what you think it does — worth running before DriverSignal when a model depends on composite scores.
+- **[TextSignal](https://github.com/UlrikErlingsen/open-text-analysis)** asks what recurring language patterns appear in open-ended responses.
 - **DriverSignal** asks which measured experiences are associated with satisfaction or recommendation, whether their scales cohere, and what deserves a causal test.
 
 ## Method references
