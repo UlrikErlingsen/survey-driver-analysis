@@ -4,6 +4,13 @@ All notable changes to DriverSignal are documented here. The project follows [Se
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-07-16
+
+### Security
+
+- Survey column names are now HTML-escaped before they are rendered in the priority callout and insight cards.
+- The Docker image keeps application code root-owned and read-only, and defusedxml hardens workbook XML parsing.
+
 ## [1.0.0] - 2026-07-14
 
 ### Added

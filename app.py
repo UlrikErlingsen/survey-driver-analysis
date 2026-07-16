@@ -7,6 +7,7 @@ os.environ.setdefault("ARROW_DEFAULT_MEMORY_POOL", "system")
 
 import base64
 import hashlib
+import html
 import inspect
 import json
 import platform
@@ -718,7 +719,7 @@ def driver_page() -> None:
     if result.inference_valid:
         direction_word = "positive" if top["standardized_beta"] >= 0 else "negative"
         callout = (
-            f"<div class='ds-callout'><b>First measured priority: {top['driver']}.</b> It receives "
+            f"<div class='ds-callout'><b>First measured priority: {html.escape(str(top['driver']))}.</b> It receives "
             f"{top['r2_contribution']:.3f} R², or {top['share_of_explained_percent']:.1f}% of the variation this model "
             f"explains. Its conditional association is {direction_word} (standardized β "
             f"{top['standardized_beta']:+.2f}). Use this to frame a hypothesis and a bounded test—not as proof of a "
@@ -726,7 +727,7 @@ def driver_page() -> None:
         )
     else:
         callout = (
-            f"<div class='ds-callout'><b>Shared model fit only: {top['driver']} receives the largest diagnostic "
+            f"<div class='ds-callout'><b>Shared model fit only: {html.escape(str(top['driver']))} receives the largest diagnostic "
             f"importance allocation ({top['share_of_explained_percent']:.1f}% of explained variance).</b> The predictor "
             "matrix is rank-deficient, so DriverSignal suppresses individual directions and intervals. Revise overlapping "
             "or duplicate drivers before making a priority claim.</div>"
@@ -935,9 +936,9 @@ def decision_page() -> None:
 
         top_three = brief.head(3)
         cards = "".join(
-            f"<article class='ds-insight'><b>PRIORITY {int(row.importance_rank):02d}</b><h3>{row.driver}</h3>"
+            f"<article class='ds-insight'><b>PRIORITY {int(row.importance_rank):02d}</b><h3>{html.escape(str(row.driver))}</h3>"
             f"<p>{row.share_of_explained_percent:.1f}% of explained variance · β {row.standardized_beta:+.2f}. "
-            f"{row.decision_prompt}</p></article>"
+            f"{html.escape(str(row.decision_prompt))}</p></article>"
             for row in top_three.itertuples(index=False)
         )
         st.markdown(f"<div class='ds-grid'>{cards}</div>", unsafe_allow_html=True)

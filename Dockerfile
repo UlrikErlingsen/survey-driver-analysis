@@ -13,8 +13,9 @@ RUN python -m pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-RUN useradd --create-home --uid 10001 driversignal \
-    && chown -R driversignal:driversignal /app
+# The application code stays root-owned and read-only; the runtime user only
+# writes to its own home.
+RUN useradd --create-home --uid 10001 driversignal
 USER driversignal
 
 EXPOSE 8594
