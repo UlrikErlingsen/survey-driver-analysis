@@ -192,11 +192,13 @@ These apps share a visual language but answer different questions:
 - **[ExperimentSignal](https://github.com/UlrikErlingsen/experiment-analysis)** asks whether a randomized treatment caused a change worth acting on — the natural next step when DriverSignal flags a driver that deserves a causal test.
 - **[MeasureSignal](https://github.com/UlrikErlingsen/measurement-validation)** asks whether a multi-item score measures what you think it does — worth running before DriverSignal when a model depends on composite scores.
 - **[TextSignal](https://github.com/UlrikErlingsen/open-text-analysis)** asks what recurring language patterns appear in open-ended responses.
-- **Pricing-evidence prototype (private pending rename)** asks what price range is supported and how contribution moves.
+- **[TagSignal](https://github.com/UlrikErlingsen/pricing-analysis)** asks what price range is supported and how contribution moves, from assigned-price, historical, or willingness-to-pay evidence.
 - **[RecommendSignal](https://github.com/UlrikErlingsen/recommender-evaluation)** asks which recommendation policy performs under temporal replay.
+- **[TraceSignal](https://github.com/UlrikErlingsen/journey-path-analysis)** asks how logged customer journeys actually unfold: transitions, path support, drop-off, and Markov removal sensitivity, with no causal channel credit.
+- **[TrackSignal](https://github.com/UlrikErlingsen/brand-tracking)** asks whether brand measures moved across tracking waves by more than a declared practical threshold.
 - **DriverSignal** asks which measured experiences are associated with satisfaction or recommendation, whether their scales cohere, and what deserves a causal test.
 
-See the maintained suite overview at [ulrikerlingsen.com](https://ulrikerlingsen.com). Product labels that have not passed their own publication screen remain outside the public catalog.
+See the maintained suite overview at [ulrikerlingsen.com](https://ulrikerlingsen.com).
 
 ## Method references
 
