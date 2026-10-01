@@ -1,4 +1,8 @@
-"""Plotly figures that keep importance, direction, and reliability distinct."""
+"""Plotly figures that keep importance, direction, and reliability distinct.
+
+UI-only: lives under ``driversignal.ui`` so the analysis core installs without Plotly. Every figure uses the
+Driver Signal Plotly template and the shared Signal chart roles instead of hard-coded colours.
+"""
 
 from __future__ import annotations
 
@@ -6,30 +10,35 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 
+from driversignal.ui import signal_theme as sig
 
-COLORS = {
-    "ink": "#17322E",
-    "deep": "#102C2A",
-    "teal": "#173C3A",
-    "coral": "#D95B40",
-    "mint": "#83D2B4",
-    "gold": "#F2C66D",
-    "paper": "#F8F5ED",
-    "muted": "#59716C",
-    "line": "rgba(23,50,46,.14)",
-}
+
+NS = "driver"
+
+
+def _palette() -> dict[str, str]:
+    """Semantic chart colours for Driver Signal (Research family)."""
+    roles = sig.roles(NS)
+    family = sig.app(NS)["fam"]
+    return {
+        "highlight": roles["highlight"],  # own series: importance bars, alpha estimates
+        "estimate": roles["estimate"],  # marker outlines
+        "interval": roles["interval"],  # robust and bootstrap interval whiskers
+        "reference": roles["zero"],  # zero line and equality reference
+        "threshold": roles["threshold"],  # .70 alpha convention
+        "positive": sig.DIVERGING[1],  # positive conditional association
+        "negative": sig.DIVERGING[-2],  # negative conditional association
+        "zone": family["300"],  # alpha > .95 redundancy band
+    }
 
 
 def _layout(figure: go.Figure, *, height: int, x_title: str, margin_left: int = 120) -> go.Figure:
     figure.update_layout(
+        template=sig.template(NS),
         height=height,
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(255,255,255,.46)",
-        font=dict(color=COLORS["ink"]),
         margin=dict(l=margin_left, r=40, t=28, b=60),
-        xaxis=dict(title=x_title, gridcolor="rgba(23,50,46,.10)", zeroline=False),
+        xaxis=dict(title=x_title, zeroline=False),
         yaxis=dict(title=None, gridcolor="rgba(0,0,0,0)"),
-        hoverlabel=dict(bgcolor=COLORS["deep"], font_color=COLORS["paper"]),
         showlegend=False,
     )
     return figure
@@ -37,6 +46,7 @@ def _layout(figure: go.Figure, *, height: int, x_title: str, margin_left: int = 
 
 def importance_figure(table: pd.DataFrame, *, show_direction: bool = True) -> go.Figure:
     """Plot nonnegative LMG importance, adding beta direction only when identified."""
+    colors = _palette()
     ordered = table.sort_values("r2_contribution", ascending=True).copy()
     if show_direction:
         signs = np.where(ordered["standardized_beta"] >= 0, "+", "−")
@@ -69,7 +79,7 @@ def importance_figure(table: pd.DataFrame, *, show_direction: bool = True) -> go
             x=ordered["r2_contribution"],
             y=ordered["driver"],
             orientation="h",
-            marker_color=COLORS["teal"],
+            marker_color=colors["highlight"],
             text=labels,
             textposition="outside",
             cliponaxis=False,
@@ -89,21 +99,22 @@ def importance_figure(table: pd.DataFrame, *, show_direction: bool = True) -> go
 
 def coefficient_figure(table: pd.DataFrame, confidence_percent: int = 95) -> go.Figure:
     """Forest plot of standardized coefficients and robust intervals."""
+    colors = _palette()
     ordered = table.sort_values("standardized_beta", ascending=True).copy()
     valid = ordered[["ci_low", "ci_high", "standardized_beta"]].notna().all(axis=1)
-    colors = [COLORS["coral"] if beta >= 0 else COLORS["gold"] for beta in ordered["standardized_beta"]]
+    marker_colors = [colors["positive"] if beta >= 0 else colors["negative"] for beta in ordered["standardized_beta"]]
     figure = go.Figure(
         go.Scatter(
             x=ordered["standardized_beta"],
             y=ordered["driver"],
             mode="markers",
-            marker=dict(color=colors, size=11, line=dict(color=COLORS["deep"], width=1)),
+            marker=dict(color=marker_colors, size=11, line=dict(color=colors["estimate"], width=1)),
             error_x=dict(
                 type="data",
                 symmetric=False,
                 array=np.where(valid, ordered["ci_high"] - ordered["standardized_beta"], 0),
                 arrayminus=np.where(valid, ordered["standardized_beta"] - ordered["ci_low"], 0),
-                color=COLORS["muted"],
+                color=colors["interval"],
                 thickness=1.5,
                 width=5,
             ),
@@ -114,7 +125,7 @@ def coefficient_figure(table: pd.DataFrame, confidence_percent: int = 95) -> go.
             ),
         )
     )
-    figure.add_vline(x=0, line_width=1, line_color=COLORS["muted"])
+    figure.add_vline(x=0, line_width=1, line_color=colors["reference"])
     return _layout(
         figure,
         height=max(330, 58 * len(ordered) + 110),
@@ -125,6 +136,7 @@ def coefficient_figure(table: pd.DataFrame, confidence_percent: int = 95) -> go.
 
 def reliability_figure(summary: pd.DataFrame) -> go.Figure:
     """Raw alpha estimates and deterministic bootstrap intervals."""
+    colors = _palette()
     plotted = summary.loc[summary["cronbach_alpha"].notna()].sort_values("cronbach_alpha").copy()
     figure = go.Figure()
     if not plotted.empty:
@@ -133,13 +145,13 @@ def reliability_figure(summary: pd.DataFrame) -> go.Figure:
                 x=plotted["cronbach_alpha"],
                 y=plotted["scale"],
                 mode="markers",
-                marker=dict(color=COLORS["coral"], size=12, line=dict(color=COLORS["deep"], width=1)),
+                marker=dict(color=colors["highlight"], size=12, line=dict(color=colors["estimate"], width=1)),
                 error_x=dict(
                     type="data",
                     symmetric=False,
                     array=(plotted["alpha_ci_high"] - plotted["cronbach_alpha"]).clip(lower=0).fillna(0),
                     arrayminus=(plotted["cronbach_alpha"] - plotted["alpha_ci_low"]).clip(lower=0).fillna(0),
-                    color=COLORS["muted"],
+                    color=colors["interval"],
                     thickness=1.5,
                     width=5,
                 ),
@@ -156,11 +168,11 @@ def reliability_figure(summary: pd.DataFrame) -> go.Figure:
         x=0.70,
         line_width=1,
         line_dash="dot",
-        line_color=COLORS["muted"],
+        line_color=colors["threshold"],
         annotation_text=".70 common exploratory convention",
         annotation_position="top left",
     )
-    figure.add_vrect(x0=0.95, x1=1.05, fillcolor="rgba(242,198,109,.14)", line_width=0)
+    figure.add_vrect(x0=0.95, x1=1.05, fillcolor=colors["zone"], opacity=0.55, line_width=0, layer="below")
     lower = min(-0.2, float(plotted["alpha_ci_low"].min()) - 0.05) if not plotted.empty else -0.2
     figure.update_xaxes(range=[max(-1.0, lower), 1.03])
     return _layout(
@@ -173,6 +185,7 @@ def reliability_figure(summary: pd.DataFrame) -> go.Figure:
 
 def fitted_figure(fitted: pd.DataFrame) -> go.Figure:
     """Observed-versus-fitted diagnostic with an equality reference."""
+    colors = _palette()
     low = float(min(fitted["observed"].min(), fitted["fitted"].min()))
     high = float(max(fitted["observed"].max(), fitted["fitted"].max()))
     figure = go.Figure(
@@ -182,7 +195,8 @@ def fitted_figure(fitted: pd.DataFrame) -> go.Figure:
             mode="markers",
             marker=dict(
                 color=fitted["cooks_distance"],
-                colorscale=[[0, COLORS["mint"]], [1, COLORS["coral"]]],
+                # Darker steps of the sequential scale only: the lightest steps vanish on the cream ground.
+                colorscale=sig.sequential(NS)[2:],
                 size=7,
                 opacity=0.72,
                 colorbar=dict(title="Cook's d"),
@@ -199,9 +213,12 @@ def fitted_figure(fitted: pd.DataFrame) -> go.Figure:
             x=[low, high],
             y=[low, high],
             mode="lines",
-            line=dict(color=COLORS["muted"], width=1, dash="dot"),
+            line=dict(color=colors["reference"], width=1, dash="dot"),
             hoverinfo="skip",
         )
     )
-    figure.update_yaxes(title="Observed outcome", gridcolor="rgba(23,50,46,.10)")
-    return _layout(figure, height=480, x_title="Fitted outcome", margin_left=70)
+    figure = _layout(figure, height=480, x_title="Fitted outcome", margin_left=70)
+    # _layout clears the y title and hides horizontal grid lines for the categorical charts; this scatter keeps
+    # its "Observed outcome" title and the template grid (gridcolor=None falls back to the template).
+    figure.update_yaxes(title="Observed outcome", gridcolor=None)
+    return figure

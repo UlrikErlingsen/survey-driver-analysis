@@ -34,7 +34,7 @@ def test_demo_loads_nps_setup_and_expected_items() -> None:
     app.run()
     _button(app.sidebar.button, "Demo · customer experience").click().run()
     assert not app.exception, [error.value for error in app.exception]
-    assert app.session_state["nav_target"] == "1 · Data & scales"
+    assert app.session_state["driver:page"] == "1 · Data & scales"
     outcome = next(widget for widget in app.selectbox if widget.label == "Outcome to explain")
     assert outcome.value == "recommend_0_10"
     interpretation = next(widget for widget in app.radio if widget.label == "Outcome interpretation")
@@ -63,8 +63,8 @@ def test_demo_analysis_runs_reliability_driver_and_export_pages() -> None:
     _button(app.button, "Analyze survey").click().run()
 
     assert not app.exception, [error.value for error in app.exception]
-    assert app.session_state["nav_target"] == "2 · Reliability"
-    analysis = app.session_state["analysis"]
+    assert app.session_state["driver:page"] == "2 · Reliability"
+    analysis = app.session_state["driver:analysis"]
     assert analysis is not None
     assert analysis.driver_result.importance.iloc[0]["driver"] == "Service"
     assert [metric.label for metric in app.metric] == ["Service", "Value", "Ease", "Trust"]
@@ -78,7 +78,8 @@ def test_demo_analysis_runs_reliability_driver_and_export_pages() -> None:
     _button(app.button, "Build decision brief & export").click().run()
     assert not app.exception, [error.value for error in app.exception]
     assert len(app.get("download_button")) == 3
-    cautions = "\n".join(str(warning.value) for warning in app.warning)
+    # The association caution is a Signal warning note on every analysis page.
+    cautions = "\n".join(str(item.value) for item in app.markdown if "sg-note warn" in str(item.value))
     assert "proven cause" in cautions.lower()
 
 
@@ -87,15 +88,15 @@ def test_setup_change_invalidates_saved_analysis() -> None:
     app.run()
     _button(app.sidebar.button, "Demo · customer experience").click().run()
     _button(app.button, "Analyze survey").click().run()
-    assert app.session_state["analysis"] is not None
+    assert app.session_state["driver:analysis"] is not None
 
     app.sidebar.radio[0].set_value("1 · Data & scales").run()
     scale_minimum = next(widget for widget in app.number_input if widget.label == "Item scale minimum")
     scale_minimum.set_value(0.0).run()
 
     assert not app.exception, [error.value for error in app.exception]
-    assert app.session_state["analysis"] is None
-    assert app.session_state["analysis_config"] is None
+    assert app.session_state["driver:analysis"] is None
+    assert app.session_state["driver:analysis_config"] is None
     notices = "\n".join(str(message.value) for message in app.info)
     assert "setup changed" in notices.lower()
 
