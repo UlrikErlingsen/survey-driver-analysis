@@ -1,8 +1,28 @@
 # Changelog
 
-All notable changes to DriverSignal are documented here. The project follows [Semantic Versioning](https://semver.org/).
+All notable changes to Driver Signal are documented here. The project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
+
+## [1.1.0] - 2026-10-02
+
+Signal brand refresh and Signal Hub entry point. The analysis, statistics, data contract and evidence-pack contents are unchanged.
+
+### Brand
+
+- Display name written **Driver Signal** (with a space) in the app, README, docs, launchers, policies, issue templates and metadata (including the evidence-pack `product` field). Package, file, Docker and environment-variable names stay `driversignal` / `DRIVERSIGNAL_*`.
+- The app uses the shared `signal_theme` module (Organic Signal design, Research family colour `#a06f1f`, Figtree): sidebar lockup, masthead, hero, cards, notes, footer and the mark as favicon replace the pasted styles.
+- Every chart uses the Driver Signal Plotly template and the shared chart roles (importance and alpha estimates in the family colour, intervals and reference lines in neutral tones, positive and negative associations at the two ends of the diverging palette) and is shown through `sig.chart`. The observed-versus-fitted chart now keeps its "Observed outcome" axis title.
+- New banner, social preview and marks in `assets/`; the old banner SVG is removed. `.streamlit/config.toml` uses the family colours and keeps the 200 MB upload limit.
+- README follows the Signal template; bug-report, feature-request and config issue templates added.
+
+### Signal Hub contract
+
+- `driversignal.ui` exposes `APP_INFO` and `render()`, so Signal Hub can embed the app; `app.py` is now a thin standalone entry point.
+- All session-state and widget keys are namespaced `driver:` (including the page selector).
+- The Plotly figures moved from `driversignal.plotting` to `driversignal.ui.plotting`. `streamlit` and `plotly` moved to a `ui` extra (also in `test`); the analysis core installs without them. `requirements.txt` still lists everything.
+- The demo survey and starter templates are generated in code (`driversignal.examples`, byte-identical to `examples/`), so the demo also works from an installed package; `scripts/generate_examples.py` reuses the same functions.
+- New tests: no Streamlit/Plotly import outside `driversignal.ui`, `render()` runs from a script (and from an installed copy of the package) without a page config, every widget key is namespaced, and the README follows the Signal template.
 
 ## [1.0.1] - 2026-07-16
 
