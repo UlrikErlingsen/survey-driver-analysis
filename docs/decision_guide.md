@@ -1,4 +1,4 @@
-# DriverSignal decision guide
+# Driver Signal decision guide
 
 ## Start with the decision, not the ranking
 
@@ -35,7 +35,7 @@ Compare in-sample and cross-validated R². Large deterioration indicates instabi
 
 LMG/Shapley R² contribution is the primary priority ranking when predictors overlap. Standardized beta gives conditional direction. A large importance contribution with a small or unstable beta can occur when predictors share signal. A negative beta can reflect suppression, scoring problems, post-treatment conditioning, or a real negative relationship.
 
-If the model is rank deficient, stop before interpreting separate directions or building an action brief. DriverSignal withholds those claims; remove or combine duplicate and perfectly overlapping drivers, then analyze again.
+If the model is rank deficient, stop before interpreting separate directions or building an action brief. Driver Signal withholds those claims; remove or combine duplicate and perfectly overlapping drivers, then analyze again.
 
 ### 6. Overlap and influence
 

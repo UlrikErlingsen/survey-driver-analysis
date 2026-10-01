@@ -1,4 +1,4 @@
-"""DriverSignal: transparent survey-driver and scale-reliability analysis."""
+"""Driver Signal: transparent survey-driver and scale-reliability analysis."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""User-facing exceptions for DriverSignal."""
+"""User-facing exceptions for Driver Signal."""
 
 from __future__ import annotations
 
@@ -13,4 +13,4 @@ def friendly_message(exc: Exception) -> str:
         return str(exc)
     if isinstance(exc, ValueError):
         return str(exc) or "The selected values could not be analyzed."
-    return "DriverSignal could not finish this analysis. Check the selected columns and try again."
+    return "Driver Signal could not finish this analysis. Check the selected columns and try again."

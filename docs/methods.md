@@ -1,8 +1,8 @@
-# DriverSignal methods
+# Driver Signal methods
 
 ## Analysis contract
 
-DriverSignal is an observational survey-prioritization tool. It scores declared constructs, checks internal consistency, estimates conditional linear associations, allocates explained variance among correlated predictors, and reports model diagnostics. It does not estimate a causal treatment effect.
+Driver Signal is an observational survey-prioritization tool. It scores declared constructs, checks internal consistency, estimates conditional linear associations, allocates explained variance among correlated predictors, and reports model diagnostics. It does not estimate a causal treatment effect.
 
 ## Construct scoring
 
@@ -34,7 +34,7 @@ These statistics are diagnostics. Deleting an item solely to maximize alpha capi
 
 ## Standardized driver regression
 
-On one complete-case sample, DriverSignal estimates:
+On one complete-case sample, Driver Signal estimates:
 
 `z(y) = beta_1 z(x_1) + ... + beta_p z(x_p) + error`
 
@@ -42,11 +42,11 @@ The standardized beta is the conditional standard-deviation difference in the ou
 
 Intervals and exploratory p-values use HC3 heteroskedasticity-robust covariance. HC3 improves finite-sample behavior under heteroskedasticity but does not address clustering, repeated observations, omitted variables, functional-form error, measurement error, sampling bias, or endogeneity.
 
-Constant predictors are removed with a warning before the final complete-case sample is formed. If the design is rank deficient, DriverSignal suppresses individual coefficients, intervals, directions, and action prompts as not uniquely identified. It does not pretend a generalized-inverse solution identifies separate effects.
+Constant predictors are removed with a warning before the final complete-case sample is formed. If the design is rank deficient, Driver Signal suppresses individual coefficients, intervals, directions, and action prompts as not uniquely identified. It does not pretend a generalized-inverse solution identifies separate effects.
 
 ## LMG/Shapley relative importance
 
-With correlated predictors, beta magnitude is not a fair allocation of shared explained variance. DriverSignal uses the LMG/Shapley decomposition:
+With correlated predictors, beta magnitude is not a fair allocation of shared explained variance. Driver Signal uses the LMG/Shapley decomposition:
 
 `phi_j = sum over S not containing j of [ |S|!(p−|S|−1)! / p! ] × [R²(S+j) − R²(S)]`
 
@@ -58,7 +58,7 @@ LMG/Shapley fairly allocates statistical overlap. It cannot determine which corr
 
 ## Fit and validation metrics
 
-DriverSignal reports:
+Driver Signal reports:
 
 - R² and adjusted R²;
 - RMSE and MAE in original outcome units;

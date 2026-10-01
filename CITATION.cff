@@ -1,6 +1,6 @@
 cff-version: 1.2.0
-message: "If DriverSignal supports your research or teaching, please cite this software and the original sources for the methods you use."
-title: "DriverSignal: Open Survey Driver Analysis and Scale Reliability"
+message: "If Driver Signal supports your research or teaching, please cite this software and the original sources for the methods you use."
+title: "Driver Signal: Open Survey Driver Analysis and Scale Reliability"
 type: software
 authors:
   - family-names: "Erlingsen"

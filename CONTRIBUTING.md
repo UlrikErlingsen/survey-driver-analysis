@@ -1,6 +1,6 @@
-# Contributing to DriverSignal
+# Contributing to Driver Signal
 
-Contributions that make DriverSignal clearer, safer, statistically sounder, or easier for marketers are welcome.
+Contributions that make Driver Signal clearer, safer, statistically sounder, or easier for marketers are welcome.
 
 ## Development setup
 
@@ -19,14 +19,15 @@ python -m streamlit run app.py
 ## Project structure
 
 ```text
-app.py                    Streamlit workflow and presentation
-src/driversignal/         Scoring, reliability, modeling, plotting, validation, and export logic
+app.py                    Thin standalone Streamlit entry point (page config + render())
+src/driversignal/         Scoring, reliability, modeling, validation, examples, and export logic
+src/driversignal/ui/      Streamlit workflow, Plotly figures, and the synced Signal theme (Signal Hub entry point)
 tests/                    Analytical, synthetic-recovery, I/O, and app tests
 docs/                     Data contract, method details, and decision guidance
 examples/                 Deterministic fictional demo and starter templates
 ```
 
-Computation under `src/driversignal/` must remain importable without Streamlit, session state, or UI side effects.
+Computation under `src/driversignal/` (outside `ui/`) must remain importable without Streamlit, Plotly, session state, or UI side effects. Only `src/driversignal/ui/` may import Streamlit or Plotly; `ui/signal_theme.py` and `ui/assets/marks/` are synced from Signal Hub and are not edited here.
 
 ## Method and data rules
 
