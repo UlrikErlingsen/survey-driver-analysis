@@ -129,13 +129,18 @@ def _set_loaded(tables: dict[str, pd.DataFrame], source_name: str, fingerprint: 
     _clear_analysis()
 
 
-def load_demo() -> None:
+def load_demo(*, navigate: bool = True) -> None:
     # Generated in memory (byte-identical to the committed demo CSV), so the demo also
     # works when the package is installed without the repository's example files, e.g. inside Signal Hub.
     raw = demo_csv_bytes()
     loaded = load_data(raw, name=DEMO_FILENAME)
     _set_loaded(loaded.tables, loaded.source_name, _fingerprint(raw))
-    go_to("1 · Data & scales")
+    if navigate:
+        go_to("1 · Data & scales")
+
+
+def demo_is_loaded() -> bool:
+    return st.session_state.get(k("source_fingerprint")) == _fingerprint(demo_csv_bytes())
 
 
 def _load_upload(uploaded) -> None:
@@ -156,8 +161,15 @@ def active_frame() -> pd.DataFrame | None:
 
 
 def _ensure_state() -> None:
+    """Set state defaults and preload the fictional survey on first run, so the app (and Signal Hub) opens with a working demo.
+
+    "Clear survey" sets the tables to None rather than deleting the key, so a cleared session stays empty.
+    """
+    first_run = k("tables") not in st.session_state
     for name, default in STATE_DEFAULTS:
         st.session_state.setdefault(k(name), default)
+    if first_run:
+        load_demo(navigate=False)
 
 
 def welcome_page() -> None:
@@ -191,9 +203,19 @@ def welcome_page() -> None:
         "**Two reading speeds.** Start with the ranked priority view and plain-language brief. "
         "Open the model, VIF, reliability, retention, and residual tables when the decision deserves an audit.",
     )
+    if demo_is_loaded():
+        sig.note(
+            "info",
+            "**The fictional demo survey is already loaded:** 520 synthetic respondents rating Service, Value, Ease, "
+            "and Trust on 1–7 items, plus satisfaction and a 0–10 recommendation score. It describes no real person, "
+            "company, or brand. Open it to run the analysis, or upload your own survey in the sidebar to replace it.",
+        )
     if st.button("Open the fictional survey", type="primary", key=k("open_demo")):
         try:
-            load_demo()
+            if demo_is_loaded():
+                go_to("1 · Data & scales")
+            else:
+                load_demo()
             st.rerun()
         except Exception as exc:
             show_error(exc)
@@ -932,7 +954,10 @@ def _sidebar() -> str:
                 st.rerun()
             except Exception as exc:
                 show_error(exc)
-        st.caption("Fictional 1–7 experience items plus satisfaction and a 0–10 recommendation score.")
+        st.caption(
+            "Preloaded when the app opens. Fictional 1–7 experience items plus satisfaction and a 0–10 "
+            "recommendation score; click to restore it after an upload."
+        )
 
         st.markdown("### Or bring your own survey")
         data_epoch = st.session_state[k("data_epoch")]

@@ -21,12 +21,91 @@ def _button(buttons, label: str):
     return next(button for button in buttons if button.label == label)
 
 
+# Runs the app, but first applies a simulated upload when the test asks for one
+# (AppTest cannot drive st.file_uploader). The upload goes through the app's own upload handler.
+UPLOAD_SCRIPT = """
+import io
+
+import pandas as pd
+import streamlit as st
+
+from driversignal.examples import demo_csv_bytes
+from driversignal.ui import app as ui
+
+if st.session_state.pop("driver:test_upload", False):
+    frame = pd.read_csv(io.BytesIO(demo_csv_bytes())).head(200).drop(columns=["region"])
+
+    class Upload:
+        name = "my_survey.csv"
+
+        def getvalue(self):
+            return frame.to_csv(index=False).encode("utf-8")
+
+    ui._load_upload(Upload())
+ui.render()
+"""
+
+
 @pytest.mark.parametrize("page", PAGES)
-def test_every_page_renders_without_data(page: str) -> None:
+def test_every_page_renders_on_first_open(page: str) -> None:
     app = AppTest.from_file(APP, default_timeout=60)
     app.run()
     app.sidebar.radio[0].set_value(page).run()
     assert not app.exception, [error.value for error in app.exception]
+
+
+@pytest.mark.parametrize("page", PAGES)
+def test_every_page_renders_without_data(page: str) -> None:
+    app = AppTest.from_file(APP, default_timeout=60)
+    app.run()
+    _button(app.sidebar.button, "Clear survey").click().run()
+    assert app.session_state["driver:tables"] is None
+    app.sidebar.radio[0].set_value(page).run()
+    assert not app.exception, [error.value for error in app.exception]
+    assert app.session_state["driver:tables"] is None  # a cleared session is not preloaded again
+
+
+def test_fresh_session_opens_with_the_fictional_demo_preloaded() -> None:
+    app = AppTest.from_file(APP, default_timeout=90)
+    app.run()
+    assert not app.exception, [error.value for error in app.exception]
+    assert app.session_state["driver:page"] == "Welcome"
+    assert app.session_state["driver:source_name"] == "demo_customer_experience_survey.csv"
+    notes = "\n".join(str(item.value) for item in app.markdown)
+    assert "fictional demo survey is already loaded" in notes
+    assert any(caption.value.startswith("Loaded locally: demo_customer") for caption in app.sidebar.caption)
+
+    _button(app.button, "Open the fictional survey").click().run()
+    assert not app.exception, [error.value for error in app.exception]
+    assert app.session_state["driver:page"] == "1 · Data & scales"
+    respondents = next(metric for metric in app.metric if metric.label == "Respondents")
+    assert respondents.value == "520"
+    outcome = next(widget for widget in app.selectbox if widget.label == "Outcome to explain")
+    assert outcome.value == "recommend_0_10"
+
+
+def test_upload_replaces_the_preloaded_demo_and_the_demo_button_restores_it() -> None:
+    app = AppTest.from_string(UPLOAD_SCRIPT, default_timeout=90)
+    app.run()
+    assert app.session_state["driver:source_name"] == "demo_customer_experience_survey.csv"
+
+    app.session_state["driver:test_upload"] = True
+    app.run()
+    assert not app.exception, [error.value for error in app.exception]
+    assert app.session_state["driver:source_name"] == "my_survey.csv"
+    assert app.session_state["driver:page"] == "1 · Data & scales"
+    respondents = next(metric for metric in app.metric if metric.label == "Respondents")
+    assert respondents.value == "200"
+
+    app.sidebar.radio[0].set_value("Welcome").run()
+    notes = "\n".join(str(item.value) for item in app.markdown)
+    assert "fictional demo survey is already loaded" not in notes
+
+    _button(app.sidebar.button, "Demo · customer experience").click().run()
+    assert not app.exception, [error.value for error in app.exception]
+    assert app.session_state["driver:source_name"] == "demo_customer_experience_survey.csv"
+    respondents = next(metric for metric in app.metric if metric.label == "Respondents")
+    assert respondents.value == "520"
 
 
 def test_demo_loads_nps_setup_and_expected_items() -> None:

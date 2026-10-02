@@ -46,14 +46,14 @@ LMG/Shapley relative importance answers the first question. Standardized OLS coe
 
 ## Try the demo in three minutes
 
-1. Start the app and load **Demo · customer experience** from the sidebar.
+1. Start the app. It opens with the fictional **Demo · customer experience** survey already loaded; click **Open the fictional survey** (or pick **1 · Data & scales**). The sidebar demo button restores it after an upload, and uploading your own survey replaces it.
 2. Keep `recommend_0_10` as the outcome. Driver Signal recognizes the four fictional constructs: Service, Value, Ease, and Trust.
 3. Notice that `ease_reverse_effort` is explicitly reverse scored against the declared 1–7 endpoints.
 4. Run the analysis. Review raw and standardized Cronbach's alpha, item diagnostics, and bootstrap intervals.
 5. Open the driver model. Compare the nonnegative LMG/Shapley priority bars with the signed standardized-beta forest plot.
 6. Inspect retention, VIF, held-out R², observed-versus-fitted results, and Cook's-distance flags, then export the evidence pack as Excel, CSV-ZIP, or JSON.
 
-The demo is deterministic synthetic teaching data. It describes no real person, company, brand, or survey.
+The preloaded demo is fictional: deterministic synthetic teaching data that describes no real person, company, brand, or survey.
 
 ## Data contract
 
