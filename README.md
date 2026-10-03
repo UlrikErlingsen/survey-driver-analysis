@@ -68,14 +68,18 @@ The outcome and selected items must be numeric. IDs, region labels, free text, a
 
 See the [data guide](docs/data_guide.md) for role selection, missingness, reverse scoring, and privacy guidance.
 
-### Large files
+### Data limits
 
-Uploads can be up to 1000 MB locally (CSV is fastest; Excel and JSON are read whole into memory). A table can hold up to 5,000,000 respondent rows and 300,000,000 cells; ratings are stored compactly (one byte per answer on a 1–7 or 0–10 scale). Construct scoring, retention, missingness, the outcome/NPS summary, alpha, and item diagnostics use every respondent. Two compute-heavy steps sample, and say so on screen and in every export:
+Run locally (standalone, inside a local Signal Hub, or on an internal company server), Driver Signal has **no built-in limit** on file size, respondents, cells, items, or drivers: the computer's memory is the limit, and running out of memory produces a plain message instead of a crash. Streamlit's upload cap defaults to 10,000 MB (`DRIVERSIGNAL_MAX_UPLOAD_MB`; `STREAMLIT_SERVER_MAX_UPLOAD_SIZE` in Docker). CSV is the fastest format for large files; ratings are stored compactly (one byte per answer on a 1–7 or 0–10 scale).
 
-- above 1,000,000 complete respondents, the driver model (coefficients, HC3 intervals, LMG/Shapley, VIF, cross-validation, influence) uses a seeded random sample of 1,000,000;
+Every calculation and export uses all rows. Two things are shown or estimated differently for very large data, and say so:
+
+- the residual chart draws at most 5,000 points (the 500 most influential plus a seeded sample), and an Excel sheet stops at Excel's own 1,048,576 rows with a note, while the CSV and JSON exports hold every row;
 - when an alpha bootstrap would resample more than 50,000,000 respondent-by-item cells, it resamples a seeded subsample and rescales the interval to the full sample by √(m/n).
 
-The residual chart draws at most 5,000 rows (the 500 most influential plus a seeded sample), and the evidence pack's influence table keeps the 50,000 rows with the highest Cook's distance. On the development laptop a 5,000,000-respondent, 223 MB CSV with four 4-item scales loaded in about 5 seconds and analyzed in about 16 seconds, using roughly 2 GB of memory at peak.
+Above 200,000 complete respondents the regression, HC3 intervals, leverage, Cook's distance, and cross-validation are accumulated in row chunks (same estimates, a fraction of the memory). On the development laptop a 5,000,000-respondent, 223 MB CSV loaded in about 5 seconds; four 4-item scales with every respondent in the model analyzed in 15–25 seconds at about 2 GB peak memory, and sixteen separate drivers at about 4 GB.
+
+A public online demo (`SIGNAL_PUBLIC=1`, set by Signal Hub's public image) applies demo limits instead: 200 MB uploads (30 MB for JSON), 500,000 rows, 8,000,000 cells, 30 items, and 20 drivers. The downloaded app has none of them.
 
 ## Analysis contract
 
@@ -184,7 +188,7 @@ python -m pip install -r requirements.txt
 python -m streamlit run app.py
 ```
 
-Driver Signal uses the reserved local port `8594`. The launchers accept `DRIVERSIGNAL_PORT`, `DRIVERSIGNAL_MAX_UPLOAD_MB` (upload cap in MB, default 1000; the app applies the same value), `DRIVERSIGNAL_NO_BROWSER`, and `DRIVERSIGNAL_DEBUG` environment variables.
+Driver Signal uses the reserved local port `8594`. The launchers accept `DRIVERSIGNAL_PORT`, `DRIVERSIGNAL_MAX_UPLOAD_MB` (Streamlit's upload cap in MB, default 10000), `DRIVERSIGNAL_NO_BROWSER`, and `DRIVERSIGNAL_DEBUG` environment variables.
 
 ### Docker
 
@@ -193,7 +197,7 @@ docker build -t driversignal .
 docker run --rm -p 8594:8594 driversignal
 ```
 
-Then open http://127.0.0.1:8594. The container runs as a non-root user. Its upload cap is `STREAMLIT_SERVER_MAX_UPLOAD_SIZE` (MB, default 1000); lower it for a shared deployment, e.g. `docker run -e STREAMLIT_SERVER_MAX_UPLOAD_SIZE=50 ...`. This repository does not promise a hosted public instance.
+Then open http://127.0.0.1:8594. The container runs as a non-root user. Its upload cap is `STREAMLIT_SERVER_MAX_UPLOAD_SIZE` (MB, default 10000). For a public demo, also set `SIGNAL_PUBLIC=1` to apply the demo limits, e.g. `docker run -e SIGNAL_PUBLIC=1 -e STREAMLIT_SERVER_MAX_UPLOAD_SIZE=50 ...`. This repository does not promise a hosted public instance.
 
 ## Privacy
 

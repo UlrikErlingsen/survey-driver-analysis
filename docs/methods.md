@@ -42,7 +42,7 @@ The standardized beta is the conditional standard-deviation difference in the ou
 
 Intervals and exploratory p-values use HC3 heteroskedasticity-robust covariance. HC3 improves finite-sample behavior under heteroskedasticity but does not address clustering, repeated observations, omitted variables, functional-form error, measurement error, sampling bias, or endogeneity.
 
-Constant predictors are removed with a warning before the final complete-case sample is formed. Above 1,000,000 complete respondents, the model, HC3 intervals, LMG/Shapley, VIF, cross-validation, and influence checks use a seeded random sample of 1,000,000 of them; the metrics table, retention table, warnings, and manifest record both counts. If the design is rank deficient, Driver Signal suppresses individual coefficients, intervals, directions, and action prompts as not uniquely identified. It does not pretend a generalized-inverse solution identifies separate effects.
+Constant predictors are removed with a warning before the final complete-case sample is formed. Every complete respondent enters the model. Above 200,000 complete respondents the coefficients, HC3 covariance (computed once on the raw design; the standardized results are exact rescalings), leverage, Cook's distance, and five-fold cross-validation are accumulated in row chunks from a QR factor and cross-products, which gives the same estimates with far less memory. If the design is rank deficient, Driver Signal suppresses individual coefficients, intervals, directions, and action prompts as not uniquely identified. It does not pretend a generalized-inverse solution identifies separate effects.
 
 ## LMG/Shapley relative importance
 

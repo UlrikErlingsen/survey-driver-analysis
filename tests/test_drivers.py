@@ -145,8 +145,13 @@ def test_cross_validation_is_deterministic() -> None:
     assert first_metrics["Five-fold CV RMSE"] == pytest.approx(second_metrics["Five-fold CV RMSE"])
 
 
-def test_more_than_twenty_drivers_is_blocked() -> None:
+def test_more_than_twenty_drivers_runs_locally_and_is_capped_in_the_public_demo(monkeypatch: pytest.MonkeyPatch) -> None:
     rng = np.random.default_rng(2)
-    frame = pd.DataFrame(rng.normal(size=(80, 22)), columns=["y", *[f"x{i}" for i in range(21)]])
+    frame = pd.DataFrame(rng.normal(size=(300, 22)), columns=["y", *[f"x{i}" for i in range(21)]])
+    monkeypatch.delenv("SIGNAL_PUBLIC", raising=False)
+    result = fit_driver_model(frame, "y", [f"x{i}" for i in range(21)], importance_permutations=200)
+    assert len(result.importance) == 21
+    assert "Approximate LMG/Shapley" in result.importance_method
+    monkeypatch.setenv("SIGNAL_PUBLIC", "1")
     with pytest.raises(DataProblem, match="at most 20"):
         fit_driver_model(frame, "y", [f"x{i}" for i in range(21)])

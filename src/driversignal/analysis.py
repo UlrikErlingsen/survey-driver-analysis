@@ -9,6 +9,7 @@ import pandas as pd
 
 from .drivers import DriverResult, fit_driver_model
 from .errors import DataProblem
+from .limits import check_drivers
 from .reliability import ReliabilityResult, analyze_reliability, reliability_label, reverse_score
 from .validation import coerce_numeric, prepare_item_spec, required_answers
 
@@ -191,8 +192,7 @@ def analyze_survey(
         raise DataProblem("Scored driver names must be unique: " + ", ".join(map(str, duplicates)) + ".")
     if outcome_column in drivers.columns:
         raise DataProblem("A scale or driver label cannot have the same name as the outcome column.")
-    if drivers.shape[1] > 20:
-        raise DataProblem("This setup creates more than 20 drivers. Group related items into constructs first.")
+    check_drivers(drivers.shape[1])
 
     driver_columns = list(drivers.columns)
     # The item copies are no longer needed; the outcome joins the driver scores in place rather than via a copy.
@@ -246,13 +246,6 @@ def analyze_survey(
             },
         ]
     )
-    model_rows = int(len(result.fitted))
-    if model_rows < retained_rows:
-        retention.loc[len(retention)] = {
-            "stage": "Rows in the driver model (seeded random sample)",
-            "rows": model_rows,
-            "percent_of_source": model_rows / starting_rows * 100.0,
-        }
     if retention_percent < 80:
         warnings.append(
             f"Only {retention_percent:.1f}% of source rows are complete for the full model; missingness may change the result."

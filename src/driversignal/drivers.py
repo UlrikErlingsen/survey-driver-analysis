@@ -8,15 +8,19 @@ import math
 
 import numpy as np
 import pandas as pd
+from scipy import stats
 import statsmodels.api as sm
 
 from .errors import DataProblem
+from .limits import check_drivers
 
 
-# Complete respondents the regression, HC3 intervals, LMG/Shapley, VIF, cross-validation and influence checks use.
-# Above it they use a seeded random sample of this size, labelled in the metrics, warnings and exports; sampling
-# error at a million rows is far below the model's own uncertainty, while memory stays bounded for 20 drivers.
-MODEL_MAX_ROWS = 1_000_000
+# Above this many complete respondents the regression, HC3 covariance, leverage, Cook's distance and cross-validation
+# are computed in row chunks from a QR factor and cross-products instead of statsmodels' full design copies. The
+# estimates are the same (one fit replaces three, standardized and raw results are exact rescalings of each other);
+# memory stays near one copy of the predictors, so every respondent can enter the model.
+LARGE_MODEL_ROWS = 200_000
+MODEL_CHUNK_ROWS = 250_000
 
 
 @dataclass(frozen=True)
@@ -32,8 +36,6 @@ class DriverResult:
     warnings: tuple[str, ...]
     importance_method: str
     inference_valid: bool
-    complete_rows: int = 0
-    model_sample_note: str = ""
 
 
 def _is_constant(values: np.ndarray) -> bool:
@@ -190,6 +192,164 @@ def _cross_validated_metrics(
     return float(cv_r2), cv_rmse
 
 
+def _chunks(n: int):
+    for start in range(0, n, MODEL_CHUNK_ROWS):
+        yield slice(start, min(start + MODEL_CHUNK_ROWS, n))
+
+
+def _ols_large(x: np.ndarray, y: np.ndarray, confidence: float) -> dict[str, object]:
+    """Standardized OLS with HC3 covariance, leverage and Cook's distance, accumulated over row chunks."""
+    n, p = x.shape
+    k = p + 1
+    x_mean = x.mean(axis=0)
+    x_sd = x.std(axis=0, ddof=0)
+    y_mean = float(y.mean())
+    y_sd = float(y.std(ddof=0))
+
+    def design(rows: slice) -> np.ndarray:
+        return np.column_stack([np.ones(rows.stop - rows.start), (x[rows] - x_mean) / x_sd])
+
+    # A running QR factor of the standardized design gives its singular values (rank, condition number) as stably as
+    # an SVD of the full matrix would, without materializing it.
+    r_factor = np.zeros((0, k))
+    cross = np.zeros(k)
+    for rows in _chunks(n):
+        block = design(rows)
+        r_factor = np.linalg.qr(np.vstack([r_factor, block]), mode="r")
+        cross += block.T @ ((y[rows] - y_mean) / y_sd)
+    singular = np.linalg.svd(r_factor, compute_uv=False)
+    tolerance = singular.max() * max(n, k) * np.finfo(float).eps
+    design_rank = int((singular > tolerance).sum())
+    condition_number = float(singular.max() / singular.min()) if singular.min() > 0 else float("inf")
+    r_pinv = np.linalg.pinv(r_factor)
+    gram_inverse = r_pinv @ r_pinv.T
+    beta = gram_inverse @ cross
+
+    residual_std = np.empty(n)
+    leverage = np.empty(n)
+    meat = np.zeros((k, k))
+    for rows in _chunks(n):
+        block = design(rows)
+        residual_std[rows] = (y[rows] - y_mean) / y_sd - block @ beta
+        leverage[rows] = np.einsum("ij,jk,ik->i", block, gram_inverse, block)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            weights = (residual_std[rows] / (1.0 - leverage[rows])) ** 2
+        meat += (block * weights[:, None]).T @ block
+    covariance = gram_inverse @ meat @ gram_inverse
+    with np.errstate(invalid="ignore"):
+        standard_error = np.sqrt(np.diag(covariance))
+    critical = float(stats.norm.ppf(1.0 - (1.0 - confidence) / 2.0))
+    with np.errstate(divide="ignore", invalid="ignore"):
+        p_values = 2.0 * stats.norm.sf(np.abs(beta / standard_error))
+    residuals = residual_std * y_sd
+    ssr = float(residuals @ residuals)
+    total = float(n * y_sd**2)
+    df_resid = n - design_rank
+    rsquared = 1.0 - ssr / total if total > 0 else float("nan")
+    scale = ssr / df_resid if df_resid > 0 else float("nan")
+    with np.errstate(divide="ignore", invalid="ignore"):
+        cooks = residuals**2 * leverage / ((1.0 - leverage) ** 2 * scale * k)
+    slope_scale = y_sd / x_sd
+    return {
+        "standardized_beta": beta[1:],
+        "standardized_ci_low": beta[1:] - critical * standard_error[1:],
+        "standardized_ci_high": beta[1:] + critical * standard_error[1:],
+        "p_value": p_values[1:],
+        "raw_coefficient": beta[1:] * slope_scale,
+        "raw_ci_low": (beta[1:] - critical * standard_error[1:]) * slope_scale,
+        "raw_ci_high": (beta[1:] + critical * standard_error[1:]) * slope_scale,
+        "design_rank": design_rank,
+        "condition_number": condition_number,
+        "fitted": y - residuals,
+        "residuals": residuals,
+        "rsquared": rsquared,
+        "rsquared_adj": 1.0 - (n - 1) / df_resid * (1.0 - rsquared) if df_resid > 0 else float("nan"),
+        "leverage": leverage,
+        "cooks": cooks,
+    }
+
+
+def _ols_statsmodels(x: pd.DataFrame, y: pd.Series, confidence: float) -> dict[str, object]:
+    """The original statsmodels path: standardized and raw HC3 fits plus influence diagnostics."""
+    p = x.shape[1]
+    x_mean = x.mean(axis=0)
+    x_sd = x.std(axis=0, ddof=0)
+    y_mean = float(y.mean())
+    y_sd = float(y.std(ddof=0))
+    x_standardized = (x - x_mean) / x_sd
+    y_standardized = (y - y_mean) / y_sd
+    internal_names = [f"__driver_{index}" for index in range(p)]
+    standardized_model = x_standardized.copy()
+    standardized_model.columns = internal_names
+    raw_model = x.copy()
+    raw_model.columns = internal_names
+
+    standardized_design = sm.add_constant(standardized_model, has_constant="add")
+    standard_fit = sm.OLS(y_standardized, standardized_design).fit(cov_type="HC3")
+    raw_design = sm.add_constant(raw_model, has_constant="add")
+    raw_fit = sm.OLS(y, raw_design).fit(cov_type="HC3")
+    base_fit = sm.OLS(y, raw_design).fit()
+    alpha = 1.0 - confidence
+    standard_ci = standard_fit.conf_int(alpha=alpha)
+    raw_ci = raw_fit.conf_int(alpha=alpha)
+    influence = base_fit.get_influence()
+    return {
+        "standardized_beta": standard_fit.params[internal_names].to_numpy(dtype=float),
+        "standardized_ci_low": standard_ci.loc[internal_names, 0].to_numpy(dtype=float),
+        "standardized_ci_high": standard_ci.loc[internal_names, 1].to_numpy(dtype=float),
+        "p_value": standard_fit.pvalues[internal_names].to_numpy(dtype=float),
+        "raw_coefficient": raw_fit.params[internal_names].to_numpy(dtype=float),
+        "raw_ci_low": raw_ci.loc[internal_names, 0].to_numpy(dtype=float),
+        "raw_ci_high": raw_ci.loc[internal_names, 1].to_numpy(dtype=float),
+        "design_rank": int(np.linalg.matrix_rank(standardized_design.to_numpy(dtype=float))),
+        "condition_number": float(np.linalg.cond(standardized_design.to_numpy(dtype=float))),
+        "fitted": np.asarray(base_fit.fittedvalues, dtype=float),
+        "residuals": np.asarray(base_fit.resid, dtype=float),
+        "rsquared": float(base_fit.rsquared),
+        "rsquared_adj": float(base_fit.rsquared_adj),
+        "leverage": np.asarray(influence.hat_matrix_diag, dtype=float),
+        "cooks": np.asarray(influence.cooks_distance[0], dtype=float),
+    }
+
+
+def _cross_validated_metrics_large(
+    predictors: np.ndarray,
+    outcome: np.ndarray,
+    folds: int = 5,
+    seed: int = 2026,
+) -> tuple[float, float]:
+    """The five-fold check from per-fold cross-products: each training fit is the total minus one fold."""
+    n, p = predictors.shape
+    if n < max(30, p * 5) or folds < 2:
+        return float("nan"), float("nan")
+    folds = min(folds, n)
+    rng = np.random.default_rng(seed)
+    order = rng.permutation(n)
+    assignments = np.empty(n, dtype=int)
+    assignments[order] = np.arange(n) % folds
+    grams = np.zeros((folds, p + 1, p + 1))
+    crosses = np.zeros((folds, p + 1))
+    for rows in _chunks(n):
+        block = _design(predictors[rows])
+        for fold in range(folds):
+            mask = assignments[rows] == fold
+            grams[fold] += block[mask].T @ block[mask]
+            crosses[fold] += block[mask].T @ outcome[rows][mask]
+    coefficients = [
+        np.linalg.lstsq(grams.sum(axis=0) - grams[fold], crosses.sum(axis=0) - crosses[fold], rcond=None)[0]
+        for fold in range(folds)
+    ]
+    squared_error = 0.0
+    for rows in _chunks(n):
+        block = _design(predictors[rows])
+        fold_rows = assignments[rows]
+        predictions = np.einsum("ij,ij->i", block, np.asarray(coefficients)[fold_rows])
+        squared_error += float(((outcome[rows] - predictions) ** 2).sum())
+    total = float(np.sum((outcome - outcome.mean()) ** 2))
+    cv_r2 = 1.0 - squared_error / total if total > np.finfo(float).eps else float("nan")
+    return float(cv_r2), float(np.sqrt(squared_error / n))
+
+
 def fit_driver_model(
     model_frame: pd.DataFrame,
     outcome_column: str,
@@ -198,7 +358,6 @@ def fit_driver_model(
     exact_importance_limit: int = 10,
     importance_permutations: int = 2000,
     seed: int = 2026,
-    max_model_rows: int = MODEL_MAX_ROWS,
 ) -> DriverResult:
     """Fit standardized OLS with HC3 uncertainty and LMG relative importance."""
     if outcome_column not in model_frame:
@@ -250,22 +409,9 @@ def fit_driver_model(
 
     if dropped:
         warnings.append("Constant driver(s) were removed before the final complete-case sample: " + ", ".join(dropped) + ".")
-    if len(usable) > 20:
-        raise DataProblem("Use at most 20 scored drivers in one model so importance remains auditable.")
+    check_drivers(len(usable))
 
-    positions = np.flatnonzero(complete)
-    complete_rows = int(len(positions))
-    model_sample_note = ""
-    if complete_rows > max_model_rows:
-        positions = positions[np.sort(np.random.default_rng(seed).choice(complete_rows, size=max_model_rows, replace=False))]
-        model_sample_note = (
-            f"{complete_rows:,} complete respondents are available; the regression, HC3 intervals, LMG/Shapley "
-            f"importance, VIF, cross-validation and influence checks use a seeded random sample of "
-            f"{max_model_rows:,} of them (seed {seed}). Retention, scale scores, reliability and the outcome summary "
-            "use every respondent."
-        )
-        warnings.append(model_sample_note)
-    selected = numeric[[outcome_column, *usable]].iloc[positions]
+    selected = numeric[[outcome_column, *usable]].iloc[np.flatnonzero(complete)]
     del numeric
 
     y = selected[outcome_column].astype(float)
@@ -282,25 +428,13 @@ def fit_driver_model(
             f"Only {n:,} complete rows remain; {stability_target:,} is a useful stability check for this model size, not a theorem."
         )
 
-    x_mean = x.mean(axis=0)
-    x_sd = x.std(axis=0, ddof=0)
-    y_mean = float(y.mean())
-    y_sd = float(y.std(ddof=0))
-    x_standardized = (x - x_mean) / x_sd
-    y_standardized = (y - y_mean) / y_sd
-    internal_names = [f"__driver_{index}" for index in range(p)]
-    standardized_model = x_standardized.copy()
-    standardized_model.columns = internal_names
-    raw_model = x.copy()
-    raw_model.columns = internal_names
-
-    standardized_design = sm.add_constant(standardized_model, has_constant="add")
-    standard_fit = sm.OLS(y_standardized, standardized_design).fit(cov_type="HC3")
-    raw_design = sm.add_constant(raw_model, has_constant="add")
-    raw_fit = sm.OLS(y, raw_design).fit(cov_type="HC3")
-    base_fit = sm.OLS(y, raw_design).fit()
-
-    design_rank = int(np.linalg.matrix_rank(standardized_design.to_numpy(dtype=float)))
+    large = n > LARGE_MODEL_ROWS
+    fit = (
+        _ols_large(x.to_numpy(dtype=float), y.to_numpy(dtype=float), confidence)
+        if large
+        else _ols_statsmodels(x, y, confidence)
+    )
+    design_rank = int(fit["design_rank"])
     expected_rank = p + 1
     inference_valid = design_rank == expected_rank
     if not inference_valid:
@@ -308,23 +442,24 @@ def fit_driver_model(
             "The driver matrix is rank-deficient. Individual coefficients are not uniquely identified; interpret only the shared model fit and grouped importance with caution."
         )
 
-    alpha = 1.0 - confidence
-    standard_ci = standard_fit.conf_int(alpha=alpha)
-    raw_ci = raw_fit.conf_int(alpha=alpha)
     coefficient_rows: list[dict[str, object]] = []
-    for name, internal_name in zip(usable, internal_names, strict=True):
-        beta = float(standard_fit.params[internal_name])
+    for index, name in enumerate(usable):
+        beta = float(fit["standardized_beta"][index])
         reported_beta = beta if inference_valid else float("nan")
+
+        def identified(key: str, position: int = index) -> float:
+            return float(fit[key][position]) if inference_valid else float("nan")
+
         coefficient_rows.append(
             {
                 "driver": name,
                 "standardized_beta": reported_beta,
-                "ci_low": float(standard_ci.loc[internal_name, 0]) if inference_valid else float("nan"),
-                "ci_high": float(standard_ci.loc[internal_name, 1]) if inference_valid else float("nan"),
-                "p_value_exploratory": float(standard_fit.pvalues[internal_name]) if inference_valid else float("nan"),
-                "raw_coefficient": float(raw_fit.params[internal_name]) if inference_valid else float("nan"),
-                "raw_ci_low": float(raw_ci.loc[internal_name, 0]) if inference_valid else float("nan"),
-                "raw_ci_high": float(raw_ci.loc[internal_name, 1]) if inference_valid else float("nan"),
+                "ci_low": identified("standardized_ci_low"),
+                "ci_high": identified("standardized_ci_high"),
+                "p_value_exploratory": identified("p_value"),
+                "raw_coefficient": identified("raw_coefficient"),
+                "raw_ci_low": identified("raw_ci_low"),
+                "raw_ci_high": identified("raw_ci_high"),
                 "direction": (
                     "Not identified"
                     if not inference_valid
@@ -355,24 +490,29 @@ def fit_driver_model(
     elif (vif["vif"] >= 5).any():
         warnings.append("At least one VIF is 5 or higher; inspect overlap before separating driver effects.")
 
-    fitted_values = np.asarray(base_fit.fittedvalues, dtype=float)
-    residuals = np.asarray(base_fit.resid, dtype=float)
+    fitted_values = fit["fitted"]
+    residuals = fit["residuals"]
     rmse = float(np.sqrt(np.mean(residuals**2)))
     mae = float(np.mean(np.abs(residuals)))
-    cv_r2, cv_rmse = _cross_validated_metrics(x.to_numpy(dtype=float), y.to_numpy(dtype=float), seed=seed)
+    cross_validate = _cross_validated_metrics_large if large else _cross_validated_metrics
+    cv_r2, cv_rmse = cross_validate(x.to_numpy(dtype=float), y.to_numpy(dtype=float), seed=seed)
     if not np.isfinite(cv_r2):
         warnings.append("The retained sample is too small for the built-in deterministic five-fold check.")
     elif cv_r2 < 0:
         warnings.append("Cross-validated R² is below zero; this model predicts held-out rows worse than their mean.")
 
-    condition_number = float(np.linalg.cond(standardized_design.to_numpy(dtype=float)))
-    influence = base_fit.get_influence()
-    leverage = np.asarray(influence.hat_matrix_diag, dtype=float)
-    cooks = np.asarray(influence.cooks_distance[0], dtype=float)
-    source_rows = selected.index.to_series().map(lambda value: int(value) + 2 if isinstance(value, (int, np.integer)) else str(value))
+    condition_number = float(fit["condition_number"])
+    leverage = fit["leverage"]
+    cooks = fit["cooks"]
+    if pd.api.types.is_integer_dtype(selected.index):
+        source_rows = selected.index.to_numpy(dtype=np.int64) + 2
+    else:
+        source_rows = selected.index.to_series().map(
+            lambda value: int(value) + 2 if isinstance(value, (int, np.integer)) else str(value)
+        ).to_numpy()
     fitted = pd.DataFrame(
         {
-            "source_row": source_rows.to_numpy(),
+            "source_row": source_rows,
             "observed": y.to_numpy(dtype=float),
             "fitted": fitted_values,
             "residual": residuals,
@@ -388,16 +528,9 @@ def fit_driver_model(
     metrics = pd.DataFrame(
         [
             {"metric": "Usable respondents", "value": n, "note": "One shared complete-case sample"},
-            {
-                "metric": "Complete respondents available",
-                "value": complete_rows,
-                "note": (
-                    f"Model uses a seeded random sample of {n:,}" if n < complete_rows else "Model uses all of them"
-                ),
-            },
             {"metric": "Drivers", "value": p, "note": "After constant columns were removed"},
-            {"metric": "R-squared", "value": float(base_fit.rsquared), "note": "In-sample variance explained"},
-            {"metric": "Adjusted R-squared", "value": float(base_fit.rsquared_adj), "note": "Penalizes model size"},
+            {"metric": "R-squared", "value": float(fit["rsquared"]), "note": "In-sample variance explained"},
+            {"metric": "Adjusted R-squared", "value": float(fit["rsquared_adj"]), "note": "Penalizes model size"},
             {"metric": "RMSE", "value": rmse, "note": "Outcome units, in sample"},
             {"metric": "MAE", "value": mae, "note": "Outcome units, in sample"},
             {"metric": "Five-fold CV R-squared", "value": cv_r2, "note": "Deterministic held-out check"},
@@ -420,6 +553,4 @@ def fit_driver_model(
         warnings=tuple(dict.fromkeys(warnings)),
         importance_method=importance_method,
         inference_valid=inference_valid,
-        complete_rows=complete_rows,
-        model_sample_note=model_sample_note,
     )

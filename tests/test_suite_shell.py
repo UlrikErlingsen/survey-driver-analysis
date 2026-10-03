@@ -64,11 +64,11 @@ def test_runtime_scaffolding_is_private_and_health_checked() -> None:
 
     assert "gatherUsageStats = false" in config
     assert 'base = "light"' in config
-    # Large-data tier: 1000 MB locally (Signal Hub's apps.yaml), the same default in both launchers and Docker.
-    assert "maxUploadSize = 1000" in config
-    assert '"${DRIVERSIGNAL_MAX_UPLOAD_MB:-1000}"' in launcher
-    assert 'set "DRIVERSIGNAL_MAX_UPLOAD_MB=1000"' in windows_launcher
-    assert "STREAMLIT_SERVER_MAX_UPLOAD_SIZE=1000" in dockerfile
+    # Streamlit's upload cap: 10,000 MB (Signal Hub's apps.yaml), the same default in both launchers and Docker.
+    assert "maxUploadSize = 10000" in config
+    assert '"${DRIVERSIGNAL_MAX_UPLOAD_MB:-10000}"' in launcher
+    assert 'set "DRIVERSIGNAL_MAX_UPLOAD_MB=10000"' in windows_launcher
+    assert "STREAMLIT_SERVER_MAX_UPLOAD_SIZE=10000" in dockerfile
     assert "--server.maxUploadSize" not in dockerfile
     assert 'primaryColor = "#a06f1f"' in config  # Signal Research family, 600 step
     assert "USER driversignal" in dockerfile

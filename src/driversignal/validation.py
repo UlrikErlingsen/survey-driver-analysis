@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 
 from .errors import DataProblem
+from .limits import check_items
 
 
 SPEC_COLUMNS = ["item", "label", "scale", "reverse_scored"]
@@ -116,8 +117,7 @@ def prepare_item_spec(spec: pd.DataFrame, available_columns: list[str]) -> pd.Da
     if repeated_standalone or conflicts:
         names = [*repeated_standalone, *conflicts]
         raise DataProblem("Driver and scale labels must be unique: " + ", ".join(map(str, names[:5])) + ".")
-    if len(work) > 30:
-        raise DataProblem("Use at most 30 item columns in one analysis. Build focused constructs first.")
+    check_items(len(work))
     return work.reset_index(drop=True)
 
 

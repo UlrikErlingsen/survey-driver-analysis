@@ -30,7 +30,7 @@ from driversignal.examples import (
     template_xlsx_bytes,
 )
 from driversignal.io import load_data, results_to_excel, results_to_json, tables_to_csv_zip
-from driversignal.reporting import INFLUENCE_EXPORT_MAX_ROWS, influence_export_note, privacy_safe_influence
+from driversignal.reporting import privacy_safe_influence
 from driversignal.ui import signal_theme as sig
 from driversignal.ui.plotting import (
     FITTED_MAX_POINTS,
@@ -621,8 +621,6 @@ def driver_page() -> None:
         full_width(right.dataframe, analysis.retention, hide_index=True)
         full_width(st.dataframe, analysis.missingness, hide_index=True)
         st.caption("Every coefficient and LMG/Shapley subset uses the same complete-case respondent sample.")
-        if result.model_sample_note:
-            st.info(result.model_sample_note)
     with tabs[1]:
         full_width(st.dataframe, result.vif, hide_index=True)
         st.markdown(
@@ -678,13 +676,10 @@ def _manifest(analysis: SurveyAnalysis) -> tuple[pd.DataFrame, dict[str, object]
         "confidence_percent": config.get("confidence_percent", 95),
         "importance_method": result.importance_method,
         "importance_seed": config.get("seed", 2026),
-        "complete_rows_available": result.complete_rows,
         "model_rows": len(result.fitted),
-        "model_sample": result.model_sample_note or "All complete respondents",
         "alpha_sample": "Listwise complete within each scale",
         "alpha_bootstrap_repetitions": config.get("alpha_bootstrap_repetitions"),
         "alpha_bootstrap_basis": _bootstrap_basis(analysis),
-        "influence_export_rows": influence_export_note(result.fitted),
         "causal_status": "Observational association; no causal effect claimed",
         "inference_valid": result.inference_valid,
         "python": platform.python_version(),
@@ -731,10 +726,7 @@ def _evidence_tables(analysis: SurveyAnalysis) -> tuple[dict[str, pd.DataFrame],
             {"setting": "Causal claim", "value": "None — observational association only"},
         ]
     )
-    export_warnings = list(analysis.warnings)
-    if len(result.fitted) > INFLUENCE_EXPORT_MAX_ROWS:
-        export_warnings.append("Influence diagnostics export: " + influence_export_note(result.fitted) + ".")
-    warnings = pd.DataFrame({"warning": export_warnings})
+    warnings = pd.DataFrame({"warning": list(analysis.warnings)})
     tables = {
         "Manifest": manifest,
         "Outcome summary": analysis.outcome_summary,
@@ -869,16 +861,9 @@ def decision_page() -> None:
         "diagnostics, and warnings. They exclude raw responses and direct identifiers."
     )
     try:
-        cache_key = (id(analysis), (st.session_state.get(k("analysis_config")) or {}).get("setup_signature"))
-        cached = st.session_state.get(k("export_cache"))
-        if cached and cached[0] == cache_key:
-            tables, excel, csv_zip, json_bytes = cached[1]
-        else:
-            tables, metadata = _evidence_tables(analysis)
-            excel = results_to_excel(tables)
-            csv_zip = tables_to_csv_zip(tables)
-            json_bytes = results_to_json(tables, metadata)
-            st.session_state[k("export_cache")] = (cache_key, (tables, excel, csv_zip, json_bytes))
+        payload = _export_payload(analysis)
+        tables = payload["tables"]
+        excel, csv_zip, json_bytes = (_download_data(payload, kind) for kind in ("excel", "csv", "json"))
         columns = st.columns(3)
         full_width(
             columns[0].download_button,
@@ -908,6 +893,40 @@ def decision_page() -> None:
             full_width(st.dataframe, pd.DataFrame({"table": list(tables), "rows": [len(table) for table in tables.values()]}), hide_index=True)
     except Exception as exc:
         show_error(exc)
+
+
+# Streamlit versions that accept a callable build each file only when its button is clicked, so a large evidence pack
+# (every influence row of millions of respondents) never blocks the page.
+LAZY_DOWNLOADS = "callable" in (st.download_button.__doc__ or "")
+
+
+def _export_payload(analysis: SurveyAnalysis) -> dict[str, object]:
+    """Evidence tables for this analysis plus memoized builders for the three export files."""
+    cache_key = (id(analysis), (st.session_state.get(k("analysis_config")) or {}).get("setup_signature"))
+    cached = st.session_state.get(k("export_cache"))
+    if cached and cached[0] == cache_key:
+        return cached[1]
+    tables, metadata = _evidence_tables(analysis)
+    builders = {
+        "excel": lambda: results_to_excel(tables),
+        "csv": lambda: tables_to_csv_zip(tables),
+        "json": lambda: results_to_json(tables, metadata),
+    }
+    built: dict[str, bytes] = {}
+
+    def build(kind: str) -> bytes:
+        if kind not in built:
+            built[kind] = builders[kind]()
+        return built[kind]
+
+    payload = {"tables": tables, "build": build}
+    st.session_state[k("export_cache")] = (cache_key, payload)
+    return payload
+
+
+def _download_data(payload: dict[str, object], kind: str):
+    build = payload["build"]
+    return (lambda: build(kind)) if LAZY_DOWNLOADS else build(kind)
 
 
 def methods_page() -> None:
@@ -978,11 +997,11 @@ def methods_page() -> None:
             - Survey weights, clustered/repeated observations, nonlinear effects, interactions, factor analysis, measurement
               invariance, ordinal models, and latent-variable structural models are outside this release.
             - VIF and LMG/Shapley describe overlap but do not resolve causal identity among correlated constructs.
-            - Large files: up to 5,000,000 respondent rows are scored and summarized in full. Above 1,000,000
-              complete respondents the driver model (coefficients, HC3, LMG/Shapley, VIF, cross-validation,
-              influence) uses a seeded random sample of 1,000,000; when an alpha bootstrap would resample more
-              than 50,000,000 cells it uses a seeded subsample rescaled by √(m/n). Both are labelled in the
-              results and exports.
+            - Data size: run locally, Driver Signal has no built-in limit on file size, respondents, items or
+              drivers; the computer's memory is the limit. Every calculation and export uses all rows. The residual
+              chart draws at most 5,000 points, and when an alpha bootstrap would resample more than 50,000,000
+              cells it uses a seeded subsample rescaled by √(m/n), labelled in the results and exports. A public
+              demo (`SIGNAL_PUBLIC=1`) applies demo caps instead.
             - Convenience samples, low response rates, leading questions, same-source measurement, and post-treatment
               controls can make technically precise estimates strategically wrong.
 
