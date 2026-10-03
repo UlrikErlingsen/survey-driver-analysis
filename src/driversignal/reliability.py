@@ -3,11 +3,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 
 import numpy as np
 import pandas as pd
 
 from .errors import DataProblem
+
+
+# Respondent-by-item cells one interactive bootstrap may resample. Above it, the bootstrap runs on a seeded random
+# subsample and its interval is rescaled to the full sample size (see bootstrap_alpha_details).
+BOOTSTRAP_CELL_BUDGET = 50_000_000
+MIN_BOOTSTRAP_SUBSAMPLE = 2_000
 
 
 @dataclass(frozen=True)
@@ -25,6 +32,7 @@ class ReliabilityResult:
     items: pd.DataFrame
     correlations: pd.DataFrame
     warnings: tuple[str, ...]
+    bootstrap_rows: int = 0
 
 
 def reverse_score(series: pd.Series, minimum: float, maximum: float) -> pd.Series:
@@ -70,30 +78,59 @@ def standardized_alpha(frame: pd.DataFrame) -> tuple[float, float]:
     return alpha, mean_r
 
 
-def bootstrap_alpha(
+def bootstrap_alpha_details(
     complete: pd.DataFrame,
     repetitions: int = 400,
     seed: int = 2026,
-) -> tuple[float, float]:
-    """Deterministic respondent bootstrap interval for raw alpha."""
-    if repetitions < 2 or len(complete) < 3 or complete.shape[1] < 2:
-        return float("nan"), float("nan")
-    if repetitions * len(complete) * complete.shape[1] > 50_000_000:
+) -> tuple[float, float, int]:
+    """Deterministic respondent bootstrap interval for raw alpha, plus the number of rows it resampled.
+
+    When ``repetitions × rows × items`` exceeds ``BOOTSTRAP_CELL_BUDGET``, the bootstrap resamples a seeded random
+    subsample of ``m`` complete rows and the interval is rescaled to the full ``n``: alpha is root-n consistent, so
+    ``alpha_n + sqrt(m / n) · (q - alpha_m)`` carries the subsample's bootstrap quantiles ``q`` over to the full
+    sample. The returned row count tells callers to label that interval.
+    """
+    n = len(complete)
+    k = complete.shape[1]
+    if repetitions < 2 or n < 3 or k < 2:
+        return float("nan"), float("nan"), 0
+    rows = min(n, max(BOOTSTRAP_CELL_BUDGET // (repetitions * k), MIN_BOOTSTRAP_SUBSAMPLE))
+    if repetitions * rows * k > BOOTSTRAP_CELL_BUDGET:
         raise DataProblem(
             "The requested alpha bootstrap is too large for an interactive run. Choose fewer repetitions or skip "
             "the bootstrap; the point estimate and item diagnostics remain available."
         )
     values = complete.to_numpy(dtype=float)
     rng = np.random.default_rng(seed)
+    if rows < n:
+        values = values[np.sort(rng.choice(n, size=rows, replace=False))]
     estimates: list[float] = []
     for _ in range(repetitions):
-        sampled = values[rng.integers(0, len(values), size=len(values))]
+        sampled = values[rng.integers(0, rows, size=rows)]
         estimate = cronbach_alpha(pd.DataFrame(sampled, columns=complete.columns))
         if np.isfinite(estimate):
             estimates.append(float(estimate))
     if len(estimates) < max(20, repetitions // 4):
-        return float("nan"), float("nan")
-    return tuple(float(value) for value in np.percentile(estimates, [2.5, 97.5]))
+        return float("nan"), float("nan"), rows
+    low, high = (float(value) for value in np.percentile(estimates, [2.5, 97.5]))
+    if rows < n:
+        full = cronbach_alpha(complete)
+        center = cronbach_alpha(pd.DataFrame(values, columns=complete.columns))
+        if not (np.isfinite(full) and np.isfinite(center)):
+            return float("nan"), float("nan"), rows
+        shrink = math.sqrt(rows / n)
+        low, high = full + shrink * (low - center), full + shrink * (high - center)
+    return low, high, rows
+
+
+def bootstrap_alpha(
+    complete: pd.DataFrame,
+    repetitions: int = 400,
+    seed: int = 2026,
+) -> tuple[float, float]:
+    """Deterministic respondent bootstrap interval for raw alpha."""
+    low, high, _ = bootstrap_alpha_details(complete, repetitions, seed)
+    return low, high
 
 
 def analyze_reliability(
@@ -123,19 +160,40 @@ def analyze_reliability(
 
     alpha = cronbach_alpha(complete)
     std_alpha, mean_r = standardized_alpha(complete)
-    ci_low, ci_high = bootstrap_alpha(complete, bootstrap_repetitions, seed)
+    ci_low, ci_high, bootstrap_rows = bootstrap_alpha_details(complete, bootstrap_repetitions, seed)
+    if 0 < bootstrap_rows < len(complete):
+        warnings.append(
+            f"Alpha interval: {bootstrap_repetitions:,} bootstrap resamples of a seeded random subsample of "
+            f"{bootstrap_rows:,} of {len(complete):,} complete respondents, rescaled to the full sample by "
+            f"sqrt({bootstrap_rows:,}/{len(complete):,}). The alpha point estimate uses every complete respondent."
+        )
     if np.isfinite(alpha) and alpha < 0:
         warnings.append("Alpha is negative. Check item direction, wording, and whether these items belong in one construct.")
     if np.isfinite(alpha) and alpha > 0.95:
         warnings.append("Very high alpha can indicate redundant items; it does not prove a better measure.")
 
     diagnostics: list[dict[str, object]] = []
-    for column in numeric.columns:
-        if len(complete) >= 2:
-            remaining = complete.drop(columns=[column])
-            rest_total = remaining.sum(axis=1)
-            item_total = complete[column].corr(rest_total) if rest_total.nunique() > 1 else float("nan")
-            alpha_deleted = cronbach_alpha(remaining) if remaining.shape[1] >= 2 else float("nan")
+    # Corrected item-total correlations and alpha-if-deleted follow from one item covariance matrix, so a scale
+    # with millions of respondents needs a single pass over the data instead of one per item.
+    covariance = np.cov(complete.to_numpy(dtype=float), rowvar=False, ddof=1) if len(complete) >= 2 else None
+    tolerance = np.finfo(float).eps
+    for position, column in enumerate(numeric.columns):
+        if covariance is not None:
+            others = [index for index in range(covariance.shape[0]) if index != position]
+            rest = covariance[np.ix_(others, others)]
+            rest_variance = float(rest.sum())
+            item_variance = float(covariance[position, position])
+            item_total = (
+                float(covariance[position, others].sum()) / float(np.sqrt(item_variance * rest_variance))
+                if rest_variance > tolerance and item_variance > tolerance
+                else float("nan")
+            )
+            remaining_items = len(others)
+            alpha_deleted = (
+                remaining_items / (remaining_items - 1) * (1.0 - float(np.trace(rest)) / rest_variance)
+                if remaining_items >= 2 and rest_variance > tolerance
+                else float("nan")
+            )
         else:
             item_total = float("nan")
             alpha_deleted = float("nan")
@@ -174,6 +232,7 @@ def analyze_reliability(
         items=pd.DataFrame(diagnostics),
         correlations=pd.DataFrame(long_correlations),
         warnings=tuple(dict.fromkeys(warnings)),
+        bootstrap_rows=int(bootstrap_rows),
     )
 
 

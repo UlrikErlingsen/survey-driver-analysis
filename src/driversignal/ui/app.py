@@ -30,9 +30,16 @@ from driversignal.examples import (
     template_xlsx_bytes,
 )
 from driversignal.io import load_data, results_to_excel, results_to_json, tables_to_csv_zip
-from driversignal.reporting import privacy_safe_influence
+from driversignal.reporting import INFLUENCE_EXPORT_MAX_ROWS, influence_export_note, privacy_safe_influence
 from driversignal.ui import signal_theme as sig
-from driversignal.ui.plotting import coefficient_figure, fitted_figure, importance_figure, reliability_figure
+from driversignal.ui.plotting import (
+    FITTED_MAX_POINTS,
+    FITTED_TOP_INFLUENCE,
+    coefficient_figure,
+    fitted_figure,
+    importance_figure,
+    reliability_figure,
+)
 from driversignal.validation import default_item_spec, infer_column, numeric_candidates
 
 
@@ -68,6 +75,8 @@ STATE_DEFAULTS = (
     ("item_spec", None),
     ("spec_signature", None),
     ("editor_epoch", 0),
+    ("column_profile", None),
+    ("export_cache", None),
 )
 
 
@@ -117,6 +126,7 @@ def _clear_analysis() -> None:
     st.session_state[k("analysis_config")] = None
     st.session_state[k("item_spec")] = None
     st.session_state[k("spec_signature")] = None
+    st.session_state[k("export_cache")] = None
     st.session_state[k("editor_epoch")] = int(st.session_state.get(k("editor_epoch"), 0)) + 1
 
 
@@ -268,11 +278,12 @@ def data_page() -> None:
         )
         return
 
-    numeric = numeric_candidates(frame)
+    profile = _column_profile(frame)
+    numeric = profile["numeric"]
     if len(numeric) < 2:
         st.error("This table needs one numeric outcome and at least one numeric survey item.")
         return
-    missing_cells = int(frame.isna().sum().sum())
+    missing_cells = profile["missing_cells"]
     columns = st.columns(4)
     columns[0].metric("Respondents", f"{len(frame):,}")
     columns[1].metric("Columns", f"{frame.shape[1]:,}")
@@ -429,15 +440,31 @@ def data_page() -> None:
             "direct customer IDs, and columns you do not need. Small groups and unusual combinations can still "
             "re-identify people even without a name.",
         )
-        missing = pd.DataFrame(
+        full_width(st.dataframe, profile["missing"], hide_index=True)
+
+
+def _column_profile(frame: pd.DataFrame) -> dict[str, object]:
+    """Numeric candidates and missingness, computed once per loaded table rather than on every rerun."""
+    signature = (st.session_state.get(k("data_epoch")), id(frame), frame.shape)
+    cached = st.session_state.get(k("column_profile"))
+    if cached and cached.get("signature") == signature:
+        return cached
+    missing_rows = frame.isna().sum()
+    profile = {
+        "signature": signature,
+        "numeric": numeric_candidates(frame),
+        "missing_cells": int(missing_rows.sum()),
+        "missing": pd.DataFrame(
             {
                 "column": frame.columns,
-                "missing_rows": [int(frame[column].isna().sum()) for column in frame],
-                "missing_percent": [float(frame[column].isna().mean() * 100) for column in frame],
+                "missing_rows": missing_rows.astype(int).to_numpy(),
+                "missing_percent": (missing_rows / max(len(frame), 1) * 100).astype(float).to_numpy(),
                 "unique_values": [int(frame[column].nunique(dropna=True)) for column in frame],
             }
-        ).sort_values("missing_percent", ascending=False)
-        full_width(st.dataframe, missing, hide_index=True)
+        ).sort_values("missing_percent", ascending=False),
+    }
+    st.session_state[k("column_profile")] = profile
+    return profile
 
 
 def _analysis_or_prompt() -> SurveyAnalysis | None:
@@ -594,6 +621,8 @@ def driver_page() -> None:
         full_width(right.dataframe, analysis.retention, hide_index=True)
         full_width(st.dataframe, analysis.missingness, hide_index=True)
         st.caption("Every coefficient and LMG/Shapley subset uses the same complete-case respondent sample.")
+        if result.model_sample_note:
+            st.info(result.model_sample_note)
     with tabs[1]:
         full_width(st.dataframe, result.vif, hide_index=True)
         st.markdown(
@@ -603,6 +632,11 @@ def driver_page() -> None:
     with tabs[2]:
         sig.chart(NS, fitted_figure(result.fitted), key=k("fitted_chart"), config=CHART_CONFIG)
         st.caption("Color highlights Cook's-distance influence. A flag is a sensitivity prompt, not proof that a row is wrong.")
+        if len(result.fitted) > FITTED_MAX_POINTS:
+            st.caption(
+                f"The chart draws {FITTED_MAX_POINTS:,} of {len(result.fitted):,} model rows: the "
+                f"{FITTED_TOP_INFLUENCE:,} with the highest Cook's distance plus a seeded random sample of the rest."
+            )
     with tabs[3]:
         st.markdown("#### Standardized and raw coefficients")
         full_width(st.dataframe, result.coefficients, hide_index=True)
@@ -644,8 +678,13 @@ def _manifest(analysis: SurveyAnalysis) -> tuple[pd.DataFrame, dict[str, object]
         "confidence_percent": config.get("confidence_percent", 95),
         "importance_method": result.importance_method,
         "importance_seed": config.get("seed", 2026),
+        "complete_rows_available": result.complete_rows,
+        "model_rows": len(result.fitted),
+        "model_sample": result.model_sample_note or "All complete respondents",
         "alpha_sample": "Listwise complete within each scale",
         "alpha_bootstrap_repetitions": config.get("alpha_bootstrap_repetitions"),
+        "alpha_bootstrap_basis": _bootstrap_basis(analysis),
+        "influence_export_rows": influence_export_note(result.fitted),
         "causal_status": "Observational association; no causal effect claimed",
         "inference_valid": result.inference_valid,
         "python": platform.python_version(),
@@ -665,6 +704,19 @@ def _manifest(analysis: SurveyAnalysis) -> tuple[pd.DataFrame, dict[str, object]
     return pd.DataFrame(rows), metadata
 
 
+def _bootstrap_basis(analysis: SurveyAnalysis) -> str:
+    summary = analysis.scale_summary
+    if summary.empty or "alpha_bootstrap_rows" not in summary:
+        return "No multi-item scales"
+    subsampled = summary.loc[
+        (summary["alpha_bootstrap_rows"] > 0) & (summary["alpha_bootstrap_rows"] < summary["complete_for_alpha"]),
+        "scale",
+    ].tolist()
+    if not subsampled:
+        return "Every complete respondent"
+    return "Seeded subsample rescaled by sqrt(m/n) for: " + ", ".join(map(str, subsampled))
+
+
 def _evidence_tables(analysis: SurveyAnalysis) -> tuple[dict[str, pd.DataFrame], dict[str, object]]:
     manifest, metadata = _manifest(analysis)
     result = analysis.driver_result
@@ -679,7 +731,10 @@ def _evidence_tables(analysis: SurveyAnalysis) -> tuple[dict[str, pd.DataFrame],
             {"setting": "Causal claim", "value": "None — observational association only"},
         ]
     )
-    warnings = pd.DataFrame({"warning": list(analysis.warnings)})
+    export_warnings = list(analysis.warnings)
+    if len(result.fitted) > INFLUENCE_EXPORT_MAX_ROWS:
+        export_warnings.append("Influence diagnostics export: " + influence_export_note(result.fitted) + ".")
+    warnings = pd.DataFrame({"warning": export_warnings})
     tables = {
         "Manifest": manifest,
         "Outcome summary": analysis.outcome_summary,
@@ -814,10 +869,16 @@ def decision_page() -> None:
         "diagnostics, and warnings. They exclude raw responses and direct identifiers."
     )
     try:
-        tables, metadata = _evidence_tables(analysis)
-        excel = results_to_excel(tables)
-        csv_zip = tables_to_csv_zip(tables)
-        json_bytes = results_to_json(tables, metadata)
+        cache_key = (id(analysis), (st.session_state.get(k("analysis_config")) or {}).get("setup_signature"))
+        cached = st.session_state.get(k("export_cache"))
+        if cached and cached[0] == cache_key:
+            tables, excel, csv_zip, json_bytes = cached[1]
+        else:
+            tables, metadata = _evidence_tables(analysis)
+            excel = results_to_excel(tables)
+            csv_zip = tables_to_csv_zip(tables)
+            json_bytes = results_to_json(tables, metadata)
+            st.session_state[k("export_cache")] = (cache_key, (tables, excel, csv_zip, json_bytes))
         columns = st.columns(3)
         full_width(
             columns[0].download_button,
@@ -917,6 +978,11 @@ def methods_page() -> None:
             - Survey weights, clustered/repeated observations, nonlinear effects, interactions, factor analysis, measurement
               invariance, ordinal models, and latent-variable structural models are outside this release.
             - VIF and LMG/Shapley describe overlap but do not resolve causal identity among correlated constructs.
+            - Large files: up to 5,000,000 respondent rows are scored and summarized in full. Above 1,000,000
+              complete respondents the driver model (coefficients, HC3, LMG/Shapley, VIF, cross-validation,
+              influence) uses a seeded random sample of 1,000,000; when an alpha bootstrap would resample more
+              than 50,000,000 cells it uses a seeded subsample rescaled by √(m/n). Both are labelled in the
+              results and exports.
             - Convenience samples, low response rates, leading questions, same-source measurement, and post-treatment
               controls can make technically precise estimates strategically wrong.
 

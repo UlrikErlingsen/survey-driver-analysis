@@ -174,6 +174,7 @@ def analyze_survey(
                 "cronbach_alpha": result.alpha if result else np.nan,
                 "alpha_ci_low": result.ci_low if result else np.nan,
                 "alpha_ci_high": result.ci_high if result else np.nan,
+                "alpha_bootstrap_rows": result.bootstrap_rows if result else np.nan,
                 "standardized_alpha": result.standardized_alpha if result else np.nan,
                 "mean_interitem_correlation": result.mean_interitem_correlation if result else np.nan,
                 "contextual_read": reliability_label(result.alpha) if result else "One item — alpha not defined",
@@ -193,17 +194,21 @@ def analyze_survey(
     if drivers.shape[1] > 20:
         raise DataProblem("This setup creates more than 20 drivers. Group related items into constructs first.")
 
-    model_frame = pd.concat([outcome.rename(outcome_column), drivers], axis=1)
+    driver_columns = list(drivers.columns)
+    # The item copies are no longer needed; the outcome joins the driver scores in place rather than via a copy.
+    del scored_items
+    drivers.insert(0, outcome_column, outcome)
+    model_frame = drivers
     missingness_rows = [
         {"field": outcome_column, "role": "Outcome", "missing_rows": int(outcome.isna().sum()), "missing_percent": float(outcome.isna().mean() * 100)}
     ]
-    for column in drivers:
+    for column in driver_columns:
         missingness_rows.append(
             {
                 "field": column,
                 "role": "Scored driver",
-                "missing_rows": int(drivers[column].isna().sum()),
-                "missing_percent": float(drivers[column].isna().mean() * 100),
+                "missing_rows": int(model_frame[column].isna().sum()),
+                "missing_percent": float(model_frame[column].isna().mean() * 100),
             }
         )
     missingness = pd.DataFrame(missingness_rows).sort_values("missing_percent", ascending=False).reset_index(drop=True)
@@ -211,16 +216,15 @@ def analyze_survey(
     result = fit_driver_model(
         model_frame,
         outcome_column,
-        list(drivers.columns),
+        driver_columns,
         confidence=confidence,
         importance_permutations=importance_permutations,
         seed=seed,
     )
     retained_names = set(result.coefficients["driver"])
-    model_predictors = [column for column in drivers.columns if column in retained_names]
-    complete = model_frame[[outcome_column, *model_predictors]].dropna(axis=0, how="any")
+    model_predictors = [column for column in driver_columns if column in retained_names]
     starting_rows = int(len(frame))
-    retained_rows = int(len(complete))
+    retained_rows = int(model_frame[[outcome_column, *model_predictors]].notna().all(axis=1).sum())
     retention_percent = retained_rows / starting_rows * 100.0 if starting_rows else 0.0
     retention = pd.DataFrame(
         [
@@ -242,6 +246,13 @@ def analyze_survey(
             },
         ]
     )
+    model_rows = int(len(result.fitted))
+    if model_rows < retained_rows:
+        retention.loc[len(retention)] = {
+            "stage": "Rows in the driver model (seeded random sample)",
+            "rows": model_rows,
+            "percent_of_source": model_rows / starting_rows * 100.0,
+        }
     if retention_percent < 80:
         warnings.append(
             f"Only {retention_percent:.1f}% of source rows are complete for the full model; missingness may change the result."

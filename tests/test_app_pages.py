@@ -195,3 +195,30 @@ def test_methods_page_exposes_formulas_and_limits() -> None:
     assert "does not establish" in body
     assert "survey weights" in body.lower()
     assert len(app.latex) == 5
+
+
+def test_sampled_driver_model_is_labelled_on_screen_and_in_exports(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Shrink the model row limit (1,000,000 in production) so the labelled sampling path runs on the demo.
+    from driversignal import drivers
+
+    defaults = list(drivers.fit_driver_model.__defaults__)
+    defaults[-1] = 300
+    monkeypatch.setattr(drivers.fit_driver_model, "__defaults__", tuple(defaults))
+    app = AppTest.from_file(APP, default_timeout=120)
+    app.run()
+    _button(app.sidebar.button, "Demo · customer experience").click().run()
+    _button(app.button, "Analyze survey").click().run()
+    assert not app.exception, [error.value for error in app.exception]
+
+    app.sidebar.radio[0].set_value("3 · Driver model").run()
+    assert not app.exception, [error.value for error in app.exception]
+    assert any("seeded random sample of 300" in str(message.value) for message in app.info)
+
+    _button(app.button, "Build decision brief & export").click().run()
+    assert not app.exception, [error.value for error in app.exception]
+    tables = app.session_state["driver:export_cache"][1][0]
+    manifest = tables["Manifest"].set_index("field")["value"]
+    assert manifest["model_rows"] == 300
+    assert "seeded random sample of 300" in manifest["model_sample"]
+    assert manifest["alpha_bootstrap_basis"] == "Every complete respondent"
+    assert manifest["influence_export_rows"] == "All 300 model rows"

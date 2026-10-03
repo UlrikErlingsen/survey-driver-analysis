@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import csv
 from io import BytesIO
 import json
 import math
@@ -19,13 +20,28 @@ from .errors import DataProblem
 
 
 SUPPORTED_EXTENSIONS = {".csv", ".xlsx", ".xls", ".xlsm", ".json"}
-MAX_UPLOAD_MB = max(1, min(int(os.getenv("DRIVERSIGNAL_MAX_UPLOAD_MB", "200")), 500))
+DEFAULT_MAX_UPLOAD_MB = 1000
+
+
+def _configured_upload_mb() -> int:
+    """Read the launcher's upload cap so the in-code check matches Streamlit's own limit."""
+    try:
+        return max(1, int(os.getenv("DRIVERSIGNAL_MAX_UPLOAD_MB", str(DEFAULT_MAX_UPLOAD_MB))))
+    except ValueError:
+        return DEFAULT_MAX_UPLOAD_MB
+
+
+# One byte limit for every format (CSV, Excel, JSON); Streamlit's maxUploadSize applies the same cap.
+MAX_UPLOAD_MB = _configured_upload_mb()
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
-MAX_JSON_BYTES = 30 * 1024 * 1024
-MAX_UNCOMPRESSED_EXCEL_BYTES = 250 * 1024 * 1024
-MAX_TABLE_ROWS = 500_000
-MAX_TOTAL_CELLS = 8_000_000
-CSV_CHUNK_ROWS = 25_000
+# Zip-bomb guard for workbooks: the unpacked XML of a legitimate sheet is several times its file size.
+MAX_UNCOMPRESSED_EXCEL_BYTES = 4 * MAX_UPLOAD_BYTES
+# Respondent rows and cells held in memory. Scoring and summaries are vectorized; the driver model and alpha
+# bootstrap sample above their own documented sizes (see drivers.MODEL_MAX_ROWS and reliability.py).
+MAX_TABLE_ROWS = 5_000_000
+MAX_TOTAL_CELLS = 300_000_000
+CSV_CHUNK_ROWS = 250_000
+CSV_SNIFF_BYTES = 64 * 1024
 ILLEGAL_XML_CHARACTERS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 
 
@@ -64,6 +80,60 @@ def _source_bytes(source: str | Path | bytes | BinaryIO) -> tuple[bytes, str]:
     return source.read(), name
 
 
+def _sniff_delimiter(raw: bytes) -> str:
+    """Detect the CSV delimiter from the first lines, so the fast C parser can read the whole file."""
+    sample = raw[:CSV_SNIFF_BYTES].decode("utf-8-sig", errors="ignore")
+    if len(raw) > CSV_SNIFF_BYTES and "\n" in sample:
+        sample = sample[: sample.rfind("\n")]
+    try:
+        return csv.Sniffer().sniff(sample, delimiters=",;\t|").delimiter
+    except csv.Error:
+        return ","
+
+
+def compact_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    """Store numbers in the smallest lossless dtype, in place: rating scales fit in int8 or float32."""
+    for column in frame.columns:
+        series = frame[column]
+        kind = series.dtype.kind
+        if kind in "iu":
+            frame[column] = pd.to_numeric(series, downcast="integer")
+        elif kind == "f" and series.dtype.itemsize > 4:
+            values = series.to_numpy()
+            narrow = values.astype(np.float32)
+            if np.array_equal(narrow.astype(values.dtype), values, equal_nan=True):
+                frame[column] = narrow
+    return frame
+
+
+def _read_csv(raw: bytes) -> pd.DataFrame:
+    chunks: list[pd.DataFrame] = []
+    rows = 0
+    cells = 0
+    reader = pd.read_csv(BytesIO(raw), sep=_sniff_delimiter(raw), chunksize=CSV_CHUNK_ROWS)
+    with reader:
+        for chunk in reader:
+            rows += len(chunk)
+            cells += int(chunk.shape[0] * chunk.shape[1])
+            if rows > MAX_TABLE_ROWS or cells > MAX_TOTAL_CELLS:
+                raise DataProblem(_size_message())
+            chunks.append(compact_frame(chunk))
+    if not chunks:
+        return pd.DataFrame()
+    if len(chunks) == 1:
+        return chunks[0]
+    frame = pd.concat(chunks, ignore_index=True)
+    chunks.clear()
+    return compact_frame(frame)
+
+
+def _size_message() -> str:
+    return (
+        f"This file has more than {MAX_TABLE_ROWS:,} rows or {MAX_TOTAL_CELLS:,} cells, the local limit. "
+        "Keep only the needed columns, or split the respondents into waves."
+    )
+
+
 def load_data(source: str | Path | bytes | BinaryIO, name: str | None = None) -> LoadedData:
     """Read CSV, Excel, or JSON without executing uploaded content."""
     raw, detected_name = _source_bytes(source)
@@ -72,30 +142,22 @@ def load_data(source: str | Path | bytes | BinaryIO, name: str | None = None) ->
     if extension not in SUPPORTED_EXTENSIONS:
         raise DataProblem("Please use CSV, Excel, or JSON survey data.")
     if len(raw) > MAX_UPLOAD_BYTES:
-        raise DataProblem(f"This file is larger than the configured {MAX_UPLOAD_MB} MB limit.")
-    if extension == ".json" and len(raw) > MAX_JSON_BYTES:
-        raise DataProblem("JSON uploads are limited to 30 MB because they expand in memory.")
+        raise DataProblem(f"This file is larger than the configured {MAX_UPLOAD_MB:,} MB limit.")
     if not raw:
         raise DataProblem("This file is empty.")
 
     try:
         if extension == ".csv":
-            chunks: list[pd.DataFrame] = []
-            rows = 0
-            cells = 0
-            for chunk in pd.read_csv(BytesIO(raw), sep=None, engine="python", chunksize=CSV_CHUNK_ROWS):
-                rows += len(chunk)
-                cells += int(chunk.shape[0] * chunk.shape[1])
-                if rows > MAX_TABLE_ROWS or cells > MAX_TOTAL_CELLS:
-                    raise DataProblem("This CSV exceeds the local safety limit. Keep fewer rows or columns first.")
-                chunks.append(chunk)
-            tables = {"data": pd.concat(chunks, ignore_index=True) if chunks else pd.DataFrame()}
+            tables = {"data": _read_csv(raw)}
         elif extension in {".xlsx", ".xls", ".xlsm"}:
             if extension in {".xlsx", ".xlsm"}:
                 with zipfile.ZipFile(BytesIO(raw)) as workbook:
                     expanded_size = sum(member.file_size for member in workbook.infolist())
                     if expanded_size > MAX_UNCOMPRESSED_EXCEL_BYTES:
-                        raise DataProblem("This workbook expands beyond 250 MB. Keep only the needed sheets.")
+                        raise DataProblem(
+                            f"This workbook expands beyond {MAX_UNCOMPRESSED_EXCEL_BYTES // (1024 * 1024):,} MB. "
+                            "Keep only the needed sheets, or save the survey as CSV."
+                        )
             tables = pd.read_excel(BytesIO(raw), sheet_name=None)
         else:
             payload = json.loads(raw.decode("utf-8-sig"))
@@ -112,8 +174,14 @@ def load_data(source: str | Path | bytes | BinaryIO, name: str | None = None) ->
                 )
             else:
                 tables = {"data": pd.DataFrame(payload)}
+            del payload
     except DataProblem:
         raise
+    except MemoryError as exc:
+        raise DataProblem(
+            "This file does not fit in the memory available to Driver Signal. Keep only the needed columns, "
+            "save it as CSV, or split the respondents into waves."
+        ) from exc
     except Exception as exc:
         raise DataProblem(
             "The file could not be read. Check that it opens normally and that the first row contains column names."
@@ -124,12 +192,12 @@ def load_data(source: str | Path | bytes | BinaryIO, name: str | None = None) ->
     for table_name, frame in tables.items():
         if frame is None or (frame.empty and len(frame.columns) == 0):
             continue
-        copy = frame.copy()
-        copy.columns = _unique_column_names(list(copy.columns))
-        total_cells += int(copy.shape[0] * copy.shape[1])
-        if len(copy) > MAX_TABLE_ROWS or total_cells > MAX_TOTAL_CELLS:
-            raise DataProblem("The file contains more rows or cells than this local release accepts.")
-        clean[str(table_name)] = copy
+        # The frames were created here, so they are renamed and compacted in place instead of copied.
+        frame.columns = _unique_column_names(list(frame.columns))
+        total_cells += int(frame.shape[0] * frame.shape[1])
+        if len(frame) > MAX_TABLE_ROWS or total_cells > MAX_TOTAL_CELLS:
+            raise DataProblem(_size_message())
+        clean[str(table_name)] = compact_frame(frame) if extension != ".csv" else frame
     if not clean:
         raise DataProblem("No usable tables were found in this file.")
     return LoadedData(tables=clean, source_name=source_name)

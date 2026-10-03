@@ -68,6 +68,15 @@ The outcome and selected items must be numeric. IDs, region labels, free text, a
 
 See the [data guide](docs/data_guide.md) for role selection, missingness, reverse scoring, and privacy guidance.
 
+### Large files
+
+Uploads can be up to 1000 MB locally (CSV is fastest; Excel and JSON are read whole into memory). A table can hold up to 5,000,000 respondent rows and 300,000,000 cells; ratings are stored compactly (one byte per answer on a 1–7 or 0–10 scale). Construct scoring, retention, missingness, the outcome/NPS summary, alpha, and item diagnostics use every respondent. Two compute-heavy steps sample, and say so on screen and in every export:
+
+- above 1,000,000 complete respondents, the driver model (coefficients, HC3 intervals, LMG/Shapley, VIF, cross-validation, influence) uses a seeded random sample of 1,000,000;
+- when an alpha bootstrap would resample more than 50,000,000 respondent-by-item cells, it resamples a seeded subsample and rescales the interval to the full sample by √(m/n).
+
+The residual chart draws at most 5,000 rows (the 500 most influential plus a seeded sample), and the evidence pack's influence table keeps the 50,000 rows with the highest Cook's distance. On the development laptop a 5,000,000-respondent, 223 MB CSV with four 4-item scales loaded in about 5 seconds and analyzed in about 16 seconds, using roughly 2 GB of memory at peak.
+
 ## Analysis contract
 
 Before modeling, the setup page records the outcome, its interpretation (NPS or another numeric rating), the items used, each item's readable label and construct, reverse-scored items, the declared item scale endpoints, the completion rule, the confidence level, the bootstrap and permutation counts, and the fixed seed. The built-in workflow:
@@ -175,7 +184,7 @@ python -m pip install -r requirements.txt
 python -m streamlit run app.py
 ```
 
-Driver Signal uses the reserved local port `8594`. The launchers accept `DRIVERSIGNAL_PORT`, `DRIVERSIGNAL_MAX_UPLOAD_MB`, `DRIVERSIGNAL_NO_BROWSER`, and `DRIVERSIGNAL_DEBUG` environment variables.
+Driver Signal uses the reserved local port `8594`. The launchers accept `DRIVERSIGNAL_PORT`, `DRIVERSIGNAL_MAX_UPLOAD_MB` (upload cap in MB, default 1000; the app applies the same value), `DRIVERSIGNAL_NO_BROWSER`, and `DRIVERSIGNAL_DEBUG` environment variables.
 
 ### Docker
 
@@ -184,7 +193,7 @@ docker build -t driversignal .
 docker run --rm -p 8594:8594 driversignal
 ```
 
-Then open http://127.0.0.1:8594. The container runs as a non-root user. This repository does not promise a hosted public instance.
+Then open http://127.0.0.1:8594. The container runs as a non-root user. Its upload cap is `STREAMLIT_SERVER_MAX_UPLOAD_SIZE` (MB, default 1000); lower it for a shared deployment, e.g. `docker run -e STREAMLIT_SERVER_MAX_UPLOAD_SIZE=50 ...`. This repository does not promise a hosted public instance.
 
 ## Privacy
 

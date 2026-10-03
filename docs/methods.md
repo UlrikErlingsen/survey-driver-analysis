@@ -20,7 +20,7 @@ For `k` items and one listwise-complete respondent sample:
 
 Sample variances use `ddof=1`. If there are fewer than two items, fewer than two complete respondents, or zero total-score variance, raw alpha is not estimable. Negative values are preserved.
 
-The bootstrap interval resamples complete respondent rows with replacement under a fixed seed and takes the 2.5th and 97.5th percentiles of finite alpha estimates.
+The bootstrap interval resamples complete respondent rows with replacement under a fixed seed and takes the 2.5th and 97.5th percentiles of finite alpha estimates. When `repetitions × n × k` would exceed 50,000,000 cells, the bootstrap resamples a seeded random subsample of `m` complete rows (at least 2,000) and carries its quantiles `q` over to the full sample as `alpha_n + sqrt(m/n) · (q − alpha_m)`, which is valid because alpha is root-n consistent. The scale summary records `m` (`alpha_bootstrap_rows`) and a scale warning labels the interval; the point estimate always uses every complete respondent.
 
 ## Standardized alpha and item diagnostics
 
@@ -42,7 +42,7 @@ The standardized beta is the conditional standard-deviation difference in the ou
 
 Intervals and exploratory p-values use HC3 heteroskedasticity-robust covariance. HC3 improves finite-sample behavior under heteroskedasticity but does not address clustering, repeated observations, omitted variables, functional-form error, measurement error, sampling bias, or endogeneity.
 
-Constant predictors are removed with a warning before the final complete-case sample is formed. If the design is rank deficient, Driver Signal suppresses individual coefficients, intervals, directions, and action prompts as not uniquely identified. It does not pretend a generalized-inverse solution identifies separate effects.
+Constant predictors are removed with a warning before the final complete-case sample is formed. Above 1,000,000 complete respondents, the model, HC3 intervals, LMG/Shapley, VIF, cross-validation, and influence checks use a seeded random sample of 1,000,000 of them; the metrics table, retention table, warnings, and manifest record both counts. If the design is rank deficient, Driver Signal suppresses individual coefficients, intervals, directions, and action prompts as not uniquely identified. It does not pretend a generalized-inverse solution identifies separate effects.
 
 ## LMG/Shapley relative importance
 

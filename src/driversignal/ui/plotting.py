@@ -183,9 +183,27 @@ def reliability_figure(summary: pd.DataFrame) -> go.Figure:
     )
 
 
-def fitted_figure(fitted: pd.DataFrame) -> go.Figure:
+FITTED_MAX_POINTS = 5_000
+FITTED_TOP_INFLUENCE = 500
+
+
+def fitted_points(fitted: pd.DataFrame, max_points: int = FITTED_MAX_POINTS) -> pd.DataFrame:
+    """Rows drawn in the residual chart: all of them, or the most influential plus a seeded random sample.
+
+    A browser cannot draw a million markers; the full table still drives the metrics and the evidence pack.
+    """
+    if len(fitted) <= max_points:
+        return fitted
+    top = fitted.nlargest(min(FITTED_TOP_INFLUENCE, max_points), "cooks_distance")
+    rest = fitted.drop(index=top.index)
+    sample = rest.sample(n=max_points - len(top), random_state=2026)
+    return pd.concat([top, sample]).sort_index()
+
+
+def fitted_figure(fitted: pd.DataFrame, max_points: int = FITTED_MAX_POINTS) -> go.Figure:
     """Observed-versus-fitted diagnostic with an equality reference."""
     colors = _palette()
+    fitted = fitted_points(fitted, max_points)
     low = float(min(fitted["observed"].min(), fitted["fitted"].min()))
     high = float(max(fitted["observed"].max(), fitted["fitted"].max()))
     figure = go.Figure(

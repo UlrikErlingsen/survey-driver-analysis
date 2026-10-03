@@ -13,6 +13,12 @@ import statsmodels.api as sm
 from .errors import DataProblem
 
 
+# Complete respondents the regression, HC3 intervals, LMG/Shapley, VIF, cross-validation and influence checks use.
+# Above it they use a seeded random sample of this size, labelled in the metrics, warnings and exports; sampling
+# error at a million rows is far below the model's own uncertainty, while memory stays bounded for 20 drivers.
+MODEL_MAX_ROWS = 1_000_000
+
+
 @dataclass(frozen=True)
 class DriverResult:
     """Portable outputs from one complete-case driver model."""
@@ -26,23 +32,17 @@ class DriverResult:
     warnings: tuple[str, ...]
     importance_method: str
     inference_valid: bool
+    complete_rows: int = 0
+    model_sample_note: str = ""
+
+
+def _is_constant(values: np.ndarray) -> bool:
+    """True when finite values cannot identify a slope: fewer than two distinct values or no spread."""
+    return len(values) == 0 or values.min() == values.max() or float(np.std(values)) <= np.finfo(float).eps
 
 
 def _design(values: np.ndarray) -> np.ndarray:
     return np.column_stack([np.ones(len(values)), values])
-
-
-def _r_squared(y: np.ndarray, values: np.ndarray) -> float:
-    centered_total = float(np.sum((y - y.mean()) ** 2))
-    if centered_total <= np.finfo(float).eps:
-        return float("nan")
-    if values.shape[1] == 0:
-        return 0.0
-    design = _design(values)
-    coefficients, *_ = np.linalg.lstsq(design, y, rcond=None)
-    residuals = y - design @ coefficients
-    result = 1.0 - float(residuals @ residuals) / centered_total
-    return float(min(1.0, max(0.0, result)))
 
 
 def lmg_importance(
@@ -126,15 +126,28 @@ def lmg_importance(
     return table.sort_values(["r2_contribution", "driver"], ascending=[False, True]).reset_index(drop=True), method
 
 
+def _gram_r_squared(gram: np.ndarray, target: int) -> float:
+    """R² of one centered column regressed on the others, from the centered cross-product matrix."""
+    total = float(gram[target, target])
+    if total <= np.finfo(float).eps:
+        return float("nan")
+    others = [index for index in range(gram.shape[0]) if index != target]
+    coefficients, *_ = np.linalg.lstsq(gram[np.ix_(others, others)], gram[others, target], rcond=None)
+    return float(min(1.0, max(0.0, float(gram[target, others] @ coefficients) / total)))
+
+
 def _vif_table(predictors: pd.DataFrame) -> pd.DataFrame:
     values = predictors.to_numpy(dtype=float)
+    # Each auxiliary regression uses the p×p cross-product matrix, so VIF costs one pass over the rows.
+    centered = values - values.mean(axis=0)
+    gram = centered.T @ centered
+    del centered
     rows: list[dict[str, object]] = []
     for index, name in enumerate(predictors.columns):
         if values.shape[1] == 1:
             vif = 1.0
         else:
-            others = np.delete(values, index, axis=1)
-            r2 = _r_squared(values[:, index], others)
+            r2 = _gram_r_squared(gram, index)
             vif = float("inf") if not np.isfinite(r2) or r2 >= 1.0 - 1e-12 else 1.0 / (1.0 - r2)
         if not np.isfinite(vif):
             level = "Not identifiable"
@@ -185,6 +198,7 @@ def fit_driver_model(
     exact_importance_limit: int = 10,
     importance_permutations: int = 2000,
     seed: int = 2026,
+    max_model_rows: int = MODEL_MAX_ROWS,
 ) -> DriverResult:
     """Fit standardized OLS with HC3 uncertainty and LMG relative importance."""
     if outcome_column not in model_frame:
@@ -197,16 +211,25 @@ def fit_driver_model(
     if missing:
         raise DataProblem("Driver columns were not found: " + ", ".join(missing[:5]) + ".")
 
-    numeric = model_frame[[outcome_column, *predictor_columns]].apply(pd.to_numeric, errors="coerce")
-    numeric = numeric.replace([np.inf, -np.inf], np.nan)
+    # One float copy of the model columns; complete-case rules use boolean masks rather than further copies, so
+    # millions of respondents stay affordable.
+    numeric = pd.concat(
+        {
+            column: pd.to_numeric(model_frame[column], errors="coerce").astype(float)
+            for column in [outcome_column, *predictor_columns]
+        },
+        axis=1,
+    )
+    numeric = numeric.where(np.isfinite(numeric))
     if numeric[outcome_column].dropna().nunique() < 2:
         raise DataProblem("The outcome does not vary in the usable source rows.")
+    outcome_present = numeric[outcome_column].notna().to_numpy()
     warnings: list[str] = []
     usable: list[str] = []
     dropped: list[str] = []
     for column in predictor_columns:
-        paired = numeric[[outcome_column, column]].dropna(axis=0, how="any")[column]
-        if paired.nunique() < 2 or float(paired.std(ddof=0)) <= np.finfo(float).eps:
+        values = numeric[column].to_numpy()
+        if _is_constant(values[outcome_present & ~np.isnan(values)]):
             dropped.append(column)
         else:
             usable.append(column)
@@ -216,16 +239,8 @@ def fit_driver_model(
     # A predictor can become constant only after the joint missing-data rule is applied. Remove one at a time and
     # rebuild the sample so another predictor is not discarded merely because the first blocked informative rows.
     while True:
-        selected = numeric[[outcome_column, *usable]].dropna(axis=0, how="any")
-        constant = next(
-            (
-                column
-                for column in usable
-                if selected[column].nunique() < 2
-                or float(selected[column].std(ddof=0)) <= np.finfo(float).eps
-            ),
-            None,
-        )
+        complete = numeric[[outcome_column, *usable]].notna().all(axis=1).to_numpy()
+        constant = next((column for column in usable if _is_constant(numeric[column].to_numpy()[complete])), None)
         if constant is None:
             break
         usable.remove(constant)
@@ -237,6 +252,21 @@ def fit_driver_model(
         warnings.append("Constant driver(s) were removed before the final complete-case sample: " + ", ".join(dropped) + ".")
     if len(usable) > 20:
         raise DataProblem("Use at most 20 scored drivers in one model so importance remains auditable.")
+
+    positions = np.flatnonzero(complete)
+    complete_rows = int(len(positions))
+    model_sample_note = ""
+    if complete_rows > max_model_rows:
+        positions = positions[np.sort(np.random.default_rng(seed).choice(complete_rows, size=max_model_rows, replace=False))]
+        model_sample_note = (
+            f"{complete_rows:,} complete respondents are available; the regression, HC3 intervals, LMG/Shapley "
+            f"importance, VIF, cross-validation and influence checks use a seeded random sample of "
+            f"{max_model_rows:,} of them (seed {seed}). Retention, scale scores, reliability and the outcome summary "
+            "use every respondent."
+        )
+        warnings.append(model_sample_note)
+    selected = numeric[[outcome_column, *usable]].iloc[positions]
+    del numeric
 
     y = selected[outcome_column].astype(float)
     if y.nunique() < 2:
@@ -358,6 +388,13 @@ def fit_driver_model(
     metrics = pd.DataFrame(
         [
             {"metric": "Usable respondents", "value": n, "note": "One shared complete-case sample"},
+            {
+                "metric": "Complete respondents available",
+                "value": complete_rows,
+                "note": (
+                    f"Model uses a seeded random sample of {n:,}" if n < complete_rows else "Model uses all of them"
+                ),
+            },
             {"metric": "Drivers", "value": p, "note": "After constant columns were removed"},
             {"metric": "R-squared", "value": float(base_fit.rsquared), "note": "In-sample variance explained"},
             {"metric": "Adjusted R-squared", "value": float(base_fit.rsquared_adj), "note": "Penalizes model size"},
@@ -383,4 +420,6 @@ def fit_driver_model(
         warnings=tuple(dict.fromkeys(warnings)),
         importance_method=importance_method,
         inference_valid=inference_valid,
+        complete_rows=complete_rows,
+        model_sample_note=model_sample_note,
     )
